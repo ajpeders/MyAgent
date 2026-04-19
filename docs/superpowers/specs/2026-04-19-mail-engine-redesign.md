@@ -42,24 +42,32 @@ MailEngine.execute(plan)
 Output to user (formatted by code, never by LLM)
 ```
 
-## MailEngine
+## MailEngine (`mail_engine.py` — new file)
 
-Central class that replaces `mail_loop()`. Owns inbox state, display, and execution.
+Central class that replaces `mail_loop()`. Owns inbox state, display, and execution. Lives in its own module — `executor.py` instantiates/resumes the engine and delegates to it, staying a thin dispatch layer.
 
 ```python
 class MailEngine:
     inbox: list[dict]           # cached emails with UIDs, recommendations
     account: str                # active account or "" for all
     model: str                  # LLM model name
+    page: int                   # current page (0-indexed)
+    page_size: int              # emails per page (default 20)
 
     def fetch(count, unread_only, account) -> list[dict]
-    def display() -> str                    # deterministic formatted list
+    def display() -> str                    # deterministic formatted list (current page)
     def display_email(index) -> str         # show full body of one email
     def execute(action: Action) -> str      # run IMAP op, return result message
-    def recommend(inbox) -> list[dict]      # LLM call: tag each email
+    def recommend(emails: list[dict]) -> None  # LLM call: tag each email
     def parse_intent(user_input) -> Plan    # LLM call: classify user input
-    def handle(user_input) -> list[str]     # main entry: parse + execute + display
+    def handle(user_input) -> list[dict]    # main entry: parse + execute + display
+    def current_page() -> list[dict]        # return emails on current page
+    def to_dict() -> dict                   # serialize for session storage
+    @classmethod
+    def from_dict(cls, data) -> MailEngine  # deserialize from session storage
 ```
+
+The engine calls `actions/mail.py` (the dispatcher) for IMAP operations, preserving the AppleScript fallback path. It calls `llm.default_adapter` for LLM operations.
 
 ### State
 
@@ -93,8 +101,9 @@ User: "delete 3" → references item 3 on current page
 ```
 
 - **Display** shows page numbers: `[Page 1/50] Showing 1-20 of 1,000`
-- **Recommendations** are generated per-page when that page is first viewed
+- **Recommendations** are generated per-page when that page is first viewed (cached so revisiting a page doesn't re-call the LLM)
 - **Search/filter** operations (by sender, date) run against the full inbox in code, then paginate the results
+- **Fuzzy/semantic queries** ("delete all marketing") operate on the current page only. Explicit sender-based commands ("delete all from X") search the full inbox in code (no LLM needed for exact matching).
 - **Indices are page-relative** — "delete 1" means item 1 on the current page
 
 ### Display (deterministic)
@@ -109,15 +118,17 @@ User: "delete 3" → references item 3 on current page
 
 Format is hardcoded. Recommendations come from `inbox[i]["recommendation"]` field set by the LLM on initial fetch. The LLM never generates this text.
 
-`display_email(index)` shows the full body of a single email from the cache. No LLM call needed — body is already fetched and stored.
+`display_email(index)` shows the full body of a single email. If the cached body is truncated (default 500 chars), the engine does a targeted IMAP fetch for the full body of that single email on demand.
 
 ### Execution (deterministic)
 
 `execute(action)` handles:
-- `mail_move` — call `move_by_uids()`, remove from inbox cache, return result string
-- `mail_read` — call IMAP fetch, replace inbox cache, call `recommend()` on new emails
-- `answer` — look up email by index in cache, return body
+- `mail_move` — resolve index to UID from cache, call `move_by_uids()` via dispatcher, remove from inbox cache, return result string. `mail_save` is just `mail_move` with `folder="Saved"`.
+- `mail_read` — call IMAP fetch via dispatcher, replace inbox cache, call `recommend()` on new emails
+- `answer` — look up email by index in cache, return body (full fetch if truncated)
 - `done` — exit
+
+Actions use **index-based** references (not filter-based). The LLM emits `index` fields; the engine resolves them to UIDs. The `filter_from`/`filter_subject` fields remain on Action for backward compatibility but are no longer emitted by the intent parser.
 
 All state mutations happen here. Confirmations for destructive actions (delete/move) are handled by the caller (CLI or API layer), not the engine.
 
@@ -177,14 +188,14 @@ Every user message goes through the LLM to get a structured Plan back. The LLM r
 
 | File | Change |
 |------|--------|
-| `executor.py` | Remove `mail_loop()`, `llm_mail_actions()`, `initial_mail_messages()`, `fetch_inbox()`, `resolve_mail_system()`. Add `MailEngine` class. |
-| `executor.py` | `dispatch_actions()` uses `MailEngine` for mail action types instead of inline logic |
-| `cli.py` | Remove `MAIL_SYSTEM` prompt. CLI creates `MailEngine` and calls `handle()` in a loop. |
+| `mail_engine.py` | **New file.** `MailEngine` class — owns inbox state, display, execution, LLM calls for recommendations and intent parsing. Serializable via `to_dict()`/`from_dict()`. |
+| `executor.py` | Remove `mail_loop()`, `llm_mail_actions()`, `initial_mail_messages()`, `fetch_inbox()`, `resolve_mail_system()`. Instantiate/resume `MailEngine` and delegate to it. |
+| `cli.py` | Remove `MAIL_SYSTEM` prompt. Mail always uses a persistent session (auto-created). CLI calls `engine.handle()` in a loop. |
 | `agents/mail.py` | Simplify system prompt — it's now just an intent parser, not a conversation partner |
-| `actions/action.py` | Add `index` field to Action for referencing emails by number |
-| `tools/schema.py` | Update mail schema to reflect simplified action set |
-| `server.py` | `ActionResponse` gains optional `emails`, `page`, `total_pages`, `total_emails` fields for structured mail data |
-| `session_store.py` | `SessionState` stores serialized `MailEngine` (inbox cache, page, account) |
+| `actions/action.py` | Add `index: list[int]` field to Action for referencing emails by number. `mail_save` becomes `mail_move` with `folder="Saved"` (remove `mail_save` enum value). |
+| `tools/schema.py` | Update mail schema to reflect simplified action set with index-based references |
+| `server.py` | `ActionResponse` gains optional `emails`, `page`, `total_pages`, `total_emails` fields for structured mail data. FastAPI auto-generates OpenAPI spec at `/openapi.json` for frontend discoverability. |
+| `session_store.py` | Add `mail_engine: dict | None` field to `SessionState` for serialized engine state. Remove existing `inbox` field (engine owns that now). |
 
 ## What Stays the Same
 
@@ -289,12 +300,22 @@ This lets the web agent build a rich interactive UI while the CLI just prints `c
 
 The confirmation flow via `pending_confirm` + `confirm=true` stays the same.
 
+## API Discoverability
+
+FastAPI auto-generates OpenAPI docs from Pydantic models:
+
+- `/openapi.json` — raw OpenAPI spec (machine-readable, for the frontend agent)
+- `/docs` — Swagger UI (human-readable)
+
+The frontend agent reads `/openapi.json` to discover all endpoints, request/response schemas, and available fields. No manual API documentation needed — keep Pydantic models well-typed and the spec stays in sync.
+
 ## Error Handling
 
 - LLM returns empty/malformed response → default to `[Action(type=done)]`, print warning
 - LLM recommendation call fails → default all emails to `[keep]`
 - IMAP connection fails → print error, don't crash the session
 - User references invalid email index → print "invalid index", redisplay
+- Stale UID (deleted externally) → `move_by_uids()` returns 0, engine warns and offers to refresh
 
 ## Testing
 
