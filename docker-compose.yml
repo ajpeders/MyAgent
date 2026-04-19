@@ -1,0 +1,15 @@
+services:
+  sandbox:
+    image: alpine:latest
+    container_name: mac-agent-sandbox
+    command: sleep infinity
+    restart: unless-stopped
+    network_mode: none
+    mem_limit: 256m
+    cpus: 0.5
+    working_dir: /workspace
+    volumes:
+      - sandbox-data:/workspace
+
+volumes:
+  sandbox-data:
