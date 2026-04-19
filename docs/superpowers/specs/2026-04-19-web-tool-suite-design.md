@@ -53,14 +53,14 @@ The shell is the shared frame that every tool lives inside:
 
 - **Sidebar:** Lists available tools, highlights the active one. Collapsible.
 - **Content area:** Renders the matched route component.
-- **Home page (`/`):** Simple landing with a list of available tools.
+- **Home page (`/`):** Simple landing with a list of available tools (hardcoded in the same tool registry that populates the sidebar — one source of truth).
 - The shell has no knowledge of individual tool internals.
 
 ## API Client
 
 Shared fetch wrapper in `api/client.ts`:
 
-- Prepends base URL (configurable for dev proxy vs production)
+- Uses relative URLs (same-origin in both dev and production; Vite proxy handles dev routing)
 - Attaches `X-API-Key` header when configured
 - Handles error responses consistently
 - Each tool adds its own API module (e.g., `api/mail.ts`) that uses the shared client
@@ -76,6 +76,8 @@ Shared fetch wrapper in `api/client.ts`:
 ### Production
 
 - `npm run build` outputs to `web/dist/`
+- `web/dist/` is gitignored — built artifacts are not committed
+- `start.sh` runs `npm run build` before starting FastAPI
 - FastAPI serves `web/dist/` as static files
 - SPA fallback: any non-`/api` route serves `index.html`
 
@@ -83,10 +85,13 @@ Shared fetch wrapper in `api/client.ts`:
 
 Changes to `server.py`:
 
-- Mount `web/dist/` for static file serving (replaces current `static/` mount)
+- Remove current `GET /` route and `static/` mount — replaced by the new SPA serving
+- Mount `web/dist/` for static file serving
 - Add catch-all route for SPA fallback (serves `index.html` for non-API paths)
 - All new API endpoints live under `/api/` prefix
-- Existing `/chat` and `/health` endpoints remain unchanged
+- Move existing `/chat` to `/api/chat` for consistency (all API routes under `/api/`)
+- `/health` remains at root (not a frontend concern)
+- Auth middleware updated: exempt all non-`/api` paths (static assets, SPA fallback) from API key checks
 
 ## Styling
 
