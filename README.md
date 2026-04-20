@@ -212,16 +212,17 @@ Env vars or `config.py`. Key vars:
 - [x] Structured mail API endpoints (GET/POST /api/mail/*)
 - [x] Admin endpoints (stats, user/session management) with API key auth
 - [x] Mail read endpoint (`GET /api/mail/:index`) for full email body
+- [x] Admin page frontend (`../MyWeb`)
 
 ### In Progress
 
-- [ ] End-to-end testing of full login → IMAP → mail flow
+- [x] End-to-end testing of full login → IMAP → mail flow
 - [ ] Redis for production session credential storage (currently SQLite-only)
 
 ### Planned
 
 - [ ] Web tool suite frontend (`../MyWeb`)
-- [ ] Web search tool integration
+- [ ] Web search tool integration (configurable provider: DuckDuckGo/Searx/Google + configurable LLM: Ollama or external SOTA API)
 - [ ] Personal data tool
 - [ ] Rename repo/directory (Gitea: `MyAgent` → `MyDevTeam`, local dir rename)
 
