@@ -6,7 +6,7 @@ from core.config import DEFAULT_MODEL, TARGET_MAILBOX
 from core.executor import dispatch_session
 from core.mail_engine import MailEngine
 from core.memory import load_memory
-from core.session_store import load_session, save_session
+from core.session_store import SessionState, load_session, save_session
 
 app = typer.Typer()
 DEFAULT_SESSION_ID = "mail"
@@ -40,13 +40,32 @@ def build_messages(prompt: str) -> list[dict]:
     ]
 
 
-def _print_results(results: list[dict]) -> None:
+def _print_results(results: list[dict], state: SessionState | None = None) -> None:
     for result in results:
         rtype = result["type"]
         if rtype == "done":
             print("[done] session ended.", flush=True)
+        elif rtype == "confirm" and result.get("pending"):
+            if typer.confirm(result["content"]):
+                _execute_pending(result["pending"], state)
+            else:
+                print("[mail] skipped.", flush=True)
         elif rtype in {"mail_list", "answer", "summary", "warning", "ask_user", "mail_move", "output", "note", "remember"}:
             print(result.get("content", ""), flush=True)
+
+
+def _execute_pending(pending: dict, state: SessionState | None) -> None:
+    """Execute a confirmed pending action on the mail engine."""
+    from core.actions.action import Action
+    if not state or not state.mail_engine:
+        print("[mail] No active mail session.", flush=True)
+        return
+    engine = MailEngine.from_dict(state.mail_engine)
+    action = Action(**pending)
+    print(engine.execute(action), flush=True)
+    state.mail_engine = engine.to_dict()
+    save_session(state)
+    print(engine.display(), flush=True)
 
 
 @app.command()
@@ -61,7 +80,7 @@ def chat(
 
     results = dispatch_session(state, prompt, model, interactive=True)
     save_session(state)
-    _print_results(results)
+    _print_results(results, state)
 
     while state.mail_engine and not any(r["type"] == "done" for r in results):
         user_input = typer.prompt("\n> ")
@@ -73,7 +92,7 @@ def chat(
 
         results = dispatch_session(state, user_input, model, interactive=True)
         save_session(state)
-        _print_results(results)
+        _print_results(results, state)
 
 
 @app.command()

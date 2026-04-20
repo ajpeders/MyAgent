@@ -6,14 +6,18 @@ __all__ = ["SessionState", "load_session", "save_session", "delete_session"]
 _store = SessionStore()
 
 
+LOCAL_USER_ID = "local"
+
+
 def load_session(session_id: str, user_id: str = "") -> SessionState:
-    """Load session by session_id. Returns a new SessionState if not found."""
+    """Load session by session_id. Returns a new SessionState if not found.
+
+    For CLI (local) mode, user_id defaults to "local" so no auth is needed.
+    """
     state = _store.get_session(session_id)
     if state:
         return state
-    if not user_id:
-        raise ValueError("user_id required to create a new session")
-    return SessionState(session_id=session_id, user_id=user_id)
+    return SessionState(session_id=session_id, user_id=user_id or LOCAL_USER_ID)
 
 
 def save_session(state: SessionState) -> None:
