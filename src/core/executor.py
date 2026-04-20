@@ -107,18 +107,48 @@ def execute(
 _head_agent = HeadAgent()
 
 
+def _resolve_pending(state: SessionState) -> list[dict]:
+    """Execute a previously confirmed pending action."""
+    pending = state.pending
+    state.pending = None
+
+    action = Action(**pending)
+
+    if action.type == ActionType.mail_move and state.mail_engine:
+        engine = MailEngine.from_dict(state.mail_engine, imap_accounts=state.imap_accounts)
+        msg = engine.execute(action)
+        state.mail_engine = engine.to_dict()
+        result = engine._mail_list_result(msg)
+        return [result]
+
+    if action.type == ActionType.command:
+        output = run_in_docker(action.content)
+        return [{"type": "output", "content": output, "agent": "command"}]
+
+    return [{"type": "warning", "content": "Nothing to confirm.", "agent": "system"}]
+
+
 def dispatch_session(
     state: SessionState,
     prompt: str,
     model: str,
     *,
     interactive: bool = False,
+    confirm: bool = False,
 ) -> list[dict]:
     """Route a prompt and return structured results.
 
     Mail state persists in the session. All other routing and context is
     stateless — resolved fresh on each request.
     """
+    # Resolve pending confirmation
+    if confirm and state.pending:
+        return _resolve_pending(state)
+
+    # Clear stale pending if not confirming
+    if state.pending and not confirm:
+        state.pending = None
+
     # If a mail session is active, delegate directly to the engine
     if state.mail_engine:
         engine = MailEngine.from_dict(state.mail_engine, imap_accounts=state.imap_accounts)
@@ -127,6 +157,11 @@ def dispatch_session(
 
         if any(r["type"] == "done" for r in results):
             state.mail_engine = None
+
+        # Store pending action for non-interactive confirm flow
+        for r in results:
+            if r.get("pending"):
+                state.pending = r["pending"]
 
         return results
 

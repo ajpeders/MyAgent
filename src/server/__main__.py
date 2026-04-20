@@ -59,6 +59,7 @@ class ChatRequest(BaseModel):
     prompt: str
     model: str = DEFAULT_MODEL
     session_id: str | None = None
+    confirm: bool = False
 
 
 class ActionResponse(BaseModel):
@@ -416,11 +417,11 @@ async def chat(request: Request):
     try:
         if session_id and session_id != "_stateless":
             state = load_session(session_id, user_id=user_id or "")
-            results = dispatch_session(state, body.prompt, body.model)
+            results = dispatch_session(state, body.prompt, body.model, confirm=body.confirm)
             save_session(state)
         else:
             state = SessionState(session_id="_stateless", user_id=user_id or "")
-            results = dispatch_session(state, body.prompt, body.model)
+            results = dispatch_session(state, body.prompt, body.model, confirm=body.confirm)
     except HTTPException:
         raise
     except Exception as exc:

@@ -64,8 +64,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     migrations = [
         ("ALTER TABLE users ADD COLUMN password_hash TEXT", "users.password_hash"),
         ("ALTER TABLE sessions ADD COLUMN imap_accounts TEXT", "sessions.imap_accounts"),
-        # Removed columns are not dropped — SQLite doesn't support DROP COLUMN before 3.35,
-        # and old data is harmless. New code simply doesn't read them.
+        ("ALTER TABLE sessions ADD COLUMN pending TEXT", "sessions.pending"),
     ]
     for sql, _ in migrations:
         try:
@@ -224,6 +223,7 @@ class SessionState:
     user_id: str = ""
     mail_engine: dict | None = None
     imap_accounts: list[dict] | None = None  # decrypted at login, available for IMAP ops
+    pending: dict | None = None  # pending action awaiting confirmation
 
 
 class SessionStore:
@@ -246,7 +246,7 @@ class SessionStore:
         """Load session state, or None if not found."""
         conn = _connect()
         row = conn.execute(
-            "SELECT session_id, user_id, mail_engine, imap_accounts FROM sessions WHERE session_id = ?",
+            "SELECT session_id, user_id, mail_engine, imap_accounts, pending FROM sessions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
         conn.close()
@@ -257,6 +257,7 @@ class SessionStore:
             user_id=row[1],
             mail_engine=json.loads(row[2]) if row[2] else None,
             imap_accounts=json.loads(row[3]) if row[3] else None,
+            pending=json.loads(row[4]) if row[4] else None,
         )
 
     def save_session(self, state: SessionState) -> None:
@@ -264,12 +265,13 @@ class SessionStore:
         now = time.time()
         conn = _connect()
         conn.execute(
-            "INSERT OR REPLACE INTO sessions (session_id, user_id, mail_engine, imap_accounts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO sessions (session_id, user_id, mail_engine, imap_accounts, pending, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 state.session_id,
                 state.user_id,
                 json.dumps(state.mail_engine) if state.mail_engine else None,
                 json.dumps(state.imap_accounts) if state.imap_accounts else None,
+                json.dumps(state.pending) if state.pending else None,
                 now,
                 now,
             ),
