@@ -41,6 +41,15 @@ async def require_api_key(request: Request, call_next):
     return await call_next(request)
 
 
+def _require_admin(request: Request) -> None:
+    """Verify the request carries a valid admin key."""
+    if not API_KEY:
+        raise HTTPException(status_code=403, detail="Admin disabled — set MYDEVTEAM_API_KEY")
+    key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+    if key != API_KEY:
+        raise HTTPException(status_code=401, detail="Admin access requires valid API key")
+
+
 # --- Helpers ---------------------------------------------------------------
 
 def _get_session_id(request: Request) -> str | None:
@@ -448,3 +457,53 @@ async def chat(request: Request):
         )
         for r in results
     ]
+
+
+# --- Admin endpoints ----------------------------------------------------------
+
+
+@app.get("/api/admin/stats")
+def admin_stats(request: Request):
+    """System overview: user count, session count, DB size."""
+    _require_admin(request)
+    import os
+    from core.db import DB_PATH
+    db_size = os.path.getsize(DB_PATH) if DB_PATH.exists() else 0
+    return {
+        "users": _user_store.count_users(),
+        "sessions": _session_store.count_sessions(),
+        "db_size_bytes": db_size,
+    }
+
+
+@app.get("/api/admin/users")
+def admin_users(request: Request):
+    """List all registered users (no sensitive data)."""
+    _require_admin(request)
+    return _user_store.list_users()
+
+
+@app.get("/api/admin/sessions")
+def admin_sessions(request: Request):
+    """List all active sessions."""
+    _require_admin(request)
+    return _session_store.list_sessions()
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(request: Request, user_id: str):
+    """Delete a user and all their data (cascades to sessions)."""
+    _require_admin(request)
+    user = _user_store.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    _user_store.delete_user(user_id)
+    return {"ok": True, "deleted": user["email"]}
+
+
+@app.delete("/api/admin/sessions/{session_id}")
+def admin_delete_session(request: Request, session_id: str):
+    """Delete a specific session."""
+    _require_admin(request)
+    _session_store.delete_session(session_id)
+    return {"ok": True}

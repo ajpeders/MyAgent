@@ -168,6 +168,24 @@ class UserStore:
         conn.commit()
         conn.close()
 
+    def list_users(self) -> list[dict]:
+        """Return all users (without sensitive fields)."""
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT user_id, email, created_at, updated_at FROM users"
+        ).fetchall()
+        conn.close()
+        return [
+            {"user_id": r[0], "email": r[1], "created_at": r[2], "updated_at": r[3]}
+            for r in rows
+        ]
+
+    def count_users(self) -> int:
+        conn = _connect()
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        conn.close()
+        return count
+
 
 # ── Email Cache Store ─────────────────────────────────────────────────────────
 
@@ -314,5 +332,29 @@ class SessionStore:
                 mail_engine=json.loads(r[2]) if r[2] else None,
                 imap_accounts=json.loads(r[3]) if r[3] else None,
             )
+            for r in rows
+        ]
+
+    def count_sessions(self) -> int:
+        conn = _connect()
+        count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        conn.close()
+        return count
+
+    def list_sessions(self) -> list[dict]:
+        """Return all sessions (metadata only, no credentials)."""
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT session_id, user_id, mail_engine IS NOT NULL, created_at, updated_at FROM sessions"
+        ).fetchall()
+        conn.close()
+        return [
+            {
+                "session_id": r[0],
+                "user_id": r[1],
+                "has_mail_engine": bool(r[2]),
+                "created_at": r[3],
+                "updated_at": r[4],
+            }
             for r in rows
         ]
