@@ -16,6 +16,7 @@ from core.db import UserStore, SessionStore, EmailCacheStore, SessionState
 def _tmp_db(tmp_path, monkeypatch):
     """Redirect DB_PATH to a temp file so tests never touch the real database."""
     monkeypatch.setattr("core.db.DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr("core.db._schema_initialized", False)
 
 
 @pytest.fixture

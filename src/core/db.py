@@ -16,12 +16,26 @@ from core.crypto import decrypt_payload, encrypt_payload, hash_password, verify_
 
 DB_PATH = Path(__file__).parent / "data.db"
 
+_schema_initialized = False
+
 
 def _connect() -> sqlite3.Connection:
-    """Connect to DB and initialize schema."""
+    """Connect to DB with WAL mode and busy timeout."""
+    global _schema_initialized
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys = ON")
+
+    if not _schema_initialized:
+        _init_schema(conn)
+        _schema_initialized = True
+
+    return conn
+
+
+def _init_schema(conn: sqlite3.Connection) -> None:
+    """Create tables and run migrations. Called once per process."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id              TEXT PRIMARY KEY,
@@ -56,7 +70,6 @@ def _connect() -> sqlite3.Connection:
     """)
     conn.commit()
     _migrate(conn)
-    return conn
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

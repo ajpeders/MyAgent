@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from core.config import DEFAULT_MODEL, API_KEY, ALLOWED_ORIGINS
+from core.config import DEFAULT_MODEL, API_KEY, ALLOWED_ORIGINS, IMAP_ACCOUNTS
 from core.crypto import decrypt_payload, encrypt_payload
 from core.db import UserStore, EmailCacheStore, SessionStore
 from core.executor import dispatch_session
@@ -380,12 +380,17 @@ def mail_get(request: Request, page: int = 0):
 def mail_fetch(request: Request, body: FetchRequest):
     """Fetch (or re-fetch) inbox from IMAP and store in session."""
     session_id, state = _require_session(request)
+    if not state.imap_accounts and not IMAP_ACCOUNTS:
+        raise HTTPException(status_code=400, detail="No IMAP accounts configured — add one via POST /api/imap first")
     engine = (
         MailEngine.from_dict(state.mail_engine, imap_accounts=state.imap_accounts)
         if state.mail_engine
         else MailEngine(model="", imap_accounts=state.imap_accounts)
     )
-    engine.fetch(count=body.count, unread_only=body.unread_only, account=body.account)
+    try:
+        engine.fetch(count=body.count, unread_only=body.unread_only, account=body.account)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     state.mail_engine = engine.to_dict()
     save_session(state)
     return _mail_page_response(engine)
