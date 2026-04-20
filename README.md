@@ -155,6 +155,32 @@ docs/superpowers/
 2. Add entry to `../MyWeb/src/tools/registry.ts`
 3. Add route in `../MyWeb/src/App.tsx`
 
+## API Endpoints
+
+### Auth
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/register` | Create user (email + password) |
+| POST | `/api/login` | Login, returns session_id + decrypted IMAP accounts |
+| POST | `/api/imap/add` | Add IMAP account (encrypted at rest) |
+
+### Chat & Mail
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/chat` | Send prompt to agent (routes via HeadAgent) |
+| POST | `/api/mail/fetch` | Fetch inbox into session mail engine |
+| GET | `/api/mail/{index}` | Read full email by page-relative index |
+| POST | `/api/mail/confirm` | Confirm pending destructive mail action |
+
+### Admin (requires `X-API-Key` header matching `MYDEVTEAM_API_KEY`)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/admin/stats` | User/session counts, DB size |
+| GET | `/api/admin/users` | List all users |
+| GET | `/api/admin/sessions` | List all sessions |
+| DELETE | `/api/admin/users/{id}` | Delete user (cascades) |
+| DELETE | `/api/admin/sessions/{id}` | Delete session |
+
 ## Config
 
 Env vars or `config.py`. Key vars:
@@ -181,6 +207,8 @@ Env vars or `config.py`. Key vars:
 - [x] IMAP credential encryption (AES-256-GCM at rest)
 - [x] SQLite-backed user, session, and email cache stores
 - [x] Structured mail API endpoints (GET/POST /api/mail/*)
+- [x] Admin endpoints (stats, user/session management) with API key auth
+- [x] Mail read endpoint (`GET /api/mail/:index`) for full email body
 
 ### In Progress
 
@@ -209,6 +237,11 @@ Env vars or `config.py`. Key vars:
 - Added SQLite stores for users, sessions, email cache
 - Added structured mail API endpoints
 - Fixed CLI session loading for local (no-auth) mode
+
+**Admin & mail read endpoints**
+- Added admin API endpoints (stats, users, sessions, delete) with API key auth
+- Added `GET /api/mail/{index}` for reading full email body by page index
+- Added confirm flow: pending actions stored in session DB between requests
 
 **Renamed project: MyAgent to MyDevTeam**
 - Updated all file references, env vars, Docker container names

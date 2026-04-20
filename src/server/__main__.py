@@ -418,6 +418,26 @@ def mail_move(request: Request, body: MoveRequest):
     return {"message": message, "folder": body.folder}
 
 
+@app.get("/api/mail/{index}")
+def mail_read(request: Request, index: int):
+    """Read a single email by page-relative index."""
+    session_id, state = _require_session(request)
+    engine = _engine_from_session(state)
+    email = engine._email_for_index(index)
+    if email is None:
+        raise HTTPException(status_code=404, detail=f"No email at index {index}")
+    return {
+        "index": index,
+        "from": email.get("from", ""),
+        "subject": email.get("subject", ""),
+        "date": email.get("date", ""),
+        "body": email.get("body", ""),
+        "account": email.get("account", ""),
+        "uid": email.get("uid"),
+        "recommendation": email.get("recommendation", ""),
+    }
+
+
 @app.post("/api/chat", response_model=list[ActionResponse])
 async def chat(request: Request):
     try:
