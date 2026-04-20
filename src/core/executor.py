@@ -231,7 +231,21 @@ def _dispatch_plan(
                 break
 
         elif action.type == ActionType.web_search:
-            results.append({"type": "web_search", "content": f"Web search not yet implemented. Query: {action.content}", "agent": agent_name})
+            from core.search import search_web
+
+            try:
+                result = search_web(action.content)
+                answer_text = result["answer"]
+                if result["results"]:
+                    answer_text += "\n\n**Web Results:**\n" + "\n".join(
+                        f"- [{r['title']}]({r['url']})" for r in result["results"][:5]
+                    )
+            except TimeoutError:
+                answer_text = "Search timed out. Please try again."
+            except Exception as e:
+                answer_text = f"Search failed: {e}"
+
+            results.append({"type": "answer", "content": answer_text, "agent": agent_name})
 
         elif action.type == ActionType.personal_data:
             results.append({"type": "personal_data", "content": f"Personal data access not yet implemented.", "agent": agent_name})
