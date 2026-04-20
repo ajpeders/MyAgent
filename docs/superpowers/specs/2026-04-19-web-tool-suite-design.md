@@ -2,7 +2,7 @@
 
 ## Overview
 
-A browser-based tool suite for MyAgent, served by the existing FastAPI backend. Each tool is a self-contained module with its own route and UI. The first tool (email client) will be designed separately.
+A browser-based tool suite for MyDevTeam, served by the existing FastAPI backend. Each tool is a self-contained module with its own route and UI. The first tool (email client) will be designed separately.
 
 ## Decisions
 

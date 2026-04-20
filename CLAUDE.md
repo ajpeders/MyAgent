@@ -1,108 +1,80 @@
-# mac-agent
+# MyDevTeam
 
-A lightweight local LLM harness for macOS. Runs a small model (default: `qwen2.5:3b`) via Ollama with a structured action dispatch loop and Apple Mail integration.
-
-## Two entry points
-
-| Entry point | File | Description |
-|---|---|---|
-| CLI | `cli.py` | Typer CLI — stateless or multi-turn (`chat` command) |
-| Web UI + API | `server.py` | FastAPI — chat UI at `/`, stateless or multi-turn |
+Personal local LLM agent with structured tool dispatch. Runs via Ollama (default: `qwen3:8b`).
 
 ## Architecture
 
-```
-cli.py / server.py  →  (stateless)   executor.py  →  LLM / External
-                    →  (multi-turn)  sessions.db
-                                          ↓ (no active agent)
-                                       HeadAgent   →  routes to subagent
-                                          ↓ (active agent)
-                                       MailAgent    →  executor.py
-                                       CommandAgent →  executor.py
-                                       AnswerAgent  →  executor.py
-                                          ↓
-                                       executor.py  →  LLM / Apple Mail / Docker / Web / Personal Data
-```
+- **Entry points**: `cli.py` (Typer CLI), `server.py` (FastAPI)
+- **Routing**: `HeadAgent` classifies intent → dispatches to scoped subagent (Mail, Command, Answer)
+- **Planning**: Subagents return a `Plan` (list of `Action`s) — the executor processes them as a batch
+- **Execution**: `executor.py` is the shared dispatch layer — all external calls go through it
+- **Mail Engine**: `mail_engine.py` owns mail inbox state, display, pagination, recommendations, and index-based execution
+- **LLM**: All calls go through `llm.default_adapter` — never call Ollama directly
+- **Tools**: `tools/registry.py` defines all tools; `tools/schema.py` builds per-agent JSON schemas
+- **State**: `session_store.py` (SQLite) for multi-turn; `memory.py` for persistent per-agent memory
 
-- **cli.py** — `chat` (stateless by default; `--session <id>` opts into multi-turn) and `mailboxes` commands.
-- **server.py** — FastAPI server. Stateless (omit `session_id`) or multi-turn (provide `session_id`) via shared `sessions.db`.
-- **executor.py** — Shared dispatch layer for all entry points and subagents. Calls the LLM, parses a `Plan`, and routes actions to the right handler (mail, command, web, etc.).
-- **agents/head.py** — Stateless router. Classifies user intent → returns `AgentRoute(agent, intent)`. Only invoked when no active agent in session.
-- **agents/mail.py**, **agents/command.py**, **agents/answer.py** — Subagent definitions. Each has a scoped tool set and its own persistent memory. Context accumulates per subagent per session.
-- **actions/action.py** — Pydantic schemas: `Action`, `Plan` (list of Actions), `AgentRoute`. LLM output is always JSON-schema-enforced via Ollama `format=`.
-- **actions/mail.py** — Apple Mail integration via AppleScript.
-- **session_store.py** — SQLite-backed session persistence (`sessions.db`). Shared by CLI and HTTP. `SessionState` tracks active agent, per-agent contexts, inbox cache, and pending confirmations.
-- **memory.py** — Per-agent persistent memory (`memory/<agent>.json`). Injected into each subagent's system prompt at context-init time.
-- **docker.py** — Runs shell commands in a Docker sandbox for the `command` action type.
-- **config.py** — Constants: `DEFAULT_MODEL`, `TARGET_MAILBOX`, `MAIL_SUMMARY_COUNT`, `HOST`, `PORT`, `API_KEY`, `ALLOWED_ORIGINS`.
-- **llm.py** — `LLMAdapter` ABC + `OllamaAdapter`. All LLM calls go through `default_adapter.complete(messages, schema, model)`. Set `LLM_PROVIDER=ollama` (default) or add a new adapter class to swap providers.
-- **tools/** — Standardised tool layer:
-  - `defs.py` — `ToolDef` / `ParamDef` dataclasses (name, description, params).
-  - `registry.py` — Every tool defined once (`MAIL_READ`, `COMMAND`, `ANSWER`, etc.) plus pre-built sets (`MAIL_TOOLS`, `COMMAND_TOOLS`, `ANSWER_TOOLS`).
-  - `prompt.py` — `build_system_prompt(role, tools, memory, context)` → consistent markdown prompt used by every agent.
-  - `schema.py` — `build_plan_schema(tools)` → dynamic JSON schema scoped to only the tools an agent has (narrows LLM output space per-agent).
+## Key constraints
 
-## Action Types
+- Each agent gets a **scoped JSON schema** — it can only emit its own action types
+- Agents return **plans** (ordered action lists), not single actions — the executor runs the queue
+- Shell commands run in a **Docker sandbox**, never on host
+- `executor.py` coordinates external work; `mail_engine.py` owns mail-specific fetch/move calls and LLM mail parsing
+- Head agent is stateless — routing only, no conversation history
+- Mail display and state changes are deterministic code. The LLM only classifies mail intent and recommendations with fresh context.
+- Mail backend: IMAP (primary, cross-platform) with AppleScript fallback (macOS only)
+- IMAP folder names are provider-specific — `_resolve_folder()` maps generic names (e.g. `Trash`) to actual paths (e.g. `[Gmail]/Trash`)
 
-| Action | CLI/API | Server |
-|---|---|---|
-| `answer`, `summary`, `warning` | ✓ | ✓ |
-| `mail_read`, `mail_move`, `mail_save` | ✓ | ✓ |
-| `ask_user`, `note`, `remember` | ✓ | ✓ |
-| `command` (Docker sandbox) | ✓ | ✓ |
-| `web_search`, `personal_data` (AnswerAgent stubs) | ✓ | ✓ |
-| `misc` | ✓ (CLI stateless only) | — |
-| `done` | ✓ | ✓ |
+## Adding a new agent
 
-## Key Design Constraints
+1. Define tools in `tools/registry.py`
+2. Subclass `AgentDef` in `agents/`
+3. Register in `agents/__init__.py`
+4. System prompt and schema are derived automatically
 
-- Both CLI and HTTP support **stateless** (no session) and **multi-turn** (shared `sessions.db`) modes. CLI defaults to stateless; pass `--session <id>` to opt into multi-turn.
-- In multi-turn mode, `HeadAgent` is only invoked when there is no active agent in the session. Once an agent is active, requests go directly to that subagent.
-- `executor.py` is the shared dispatch layer — all entry points and subagents route through it. Never call external systems (mail, docker, LLM) directly from agents or entry points.
-- All LLM calls go through `llm.default_adapter` — never call `ollama.chat()` directly. Swap providers by setting `LLM_PROVIDER` and adding an adapter to `llm.py`.
-- Each agent produces a **scoped JSON schema** via `build_plan_schema(agent.tools)` so the LLM can only output action types that agent actually has. `CommandAgent` can't emit `mail_read`; `MailAgent` can't emit `command`.
-- Each agent has its own persistent memory (`memory/<agent>.json`), injected fresh at context-init time. Memory is not part of conversation history.
-- Adding a new agent: (1) define its tools in `tools/registry.py`, (2) subclass `AgentDef`, (3) register in `agents/__init__.py`. System prompt and schema are derived automatically.
-- Shell commands always run in a **Docker sandbox**, never directly on the host.
-- The head agent is always stateless — no conversation history, routing only.
+## Mail backends
+
+- **IMAP** (`actions/mail_imap.py`): Primary backend, works cross-platform. Configured via env vars. Supports multiple accounts.
+- **AppleScript** (`actions/mail_applescript.py`): macOS-only fallback. Requires Mail.app running.
+- **Dispatcher** (`actions/mail.py`): Routes to IMAP if configured, else AppleScript.
+- **MailEngine** (`mail_engine.py`): Stores the inbox cache in `SessionState`, renders lists, resolves page-relative indices to UIDs, and updates cache after moves/deletes.
+- **Multi-account**: When multiple IMAP accounts are configured, the first interactive fetch asks which account to use. Each email carries its `account` field for targeted moves/deletes.
+
+## Tracking
+
+- **TODO.md**: Active tasks and outstanding work — check at session start, update as work completes
+- **CHANGELOG.md**: Record of completed changes — append when finishing work
+
+## Config
+
+Env vars or `config.py`. See `config.py` for all options.
 
 ## Running
 
 ```bash
-# CLI — stateless
+# CLI
 python cli.py chat "check my email"
-python cli.py mailboxes
-
-# CLI — multi-turn (persists to sessions.db)
 python cli.py chat "check my email" --session mysession
-python cli.py chat "move newsletters to Archive" --session mysession
 
-# Simple API server (http.server)
-python api.py serve
+# Server
+./start.sh
+uvicorn server:app --reload  # dev
 
-# Web UI + FastAPI server (outside-accessible)
-./start.sh                           # binds 0.0.0.0:8000, no auth
-MAC_AGENT_API_KEY=secret ./start.sh  # with API key protection
-PORT=9000 ./start.sh                 # custom port
-
-# Dev (localhost only)
-uvicorn server:app --reload
+# Tests
+.venv/bin/python -m pytest tests/ -v
 ```
 
-## Outside Access (server.py)
+## Web Frontend
 
-- Binds to `0.0.0.0` by default — reachable on local network and, with port forwarding, from the internet.
-- API key auth: set `MAC_AGENT_API_KEY` env var. Clients must send `X-API-Key: <key>` header (or `?api_key=<key>`). `/` and `/health` are always public.
-- CORS: set `ALLOWED_ORIGINS=https://myapp.com,https://other.com` to restrict origins (default `*`).
-- For internet exposure: forward port 8000 (or `$PORT`) on your router, or use a tunnel (ngrok, Cloudflare Tunnel).
+The React + TypeScript frontend lives in the sibling project `../MyWeb`. MyDevTeam exposes the FastAPI API only.
 
-## Config
+### Development
 
-Edit `config.py` or set env vars to change model, target mailbox, or email fetch count.
+```bash
+cd ../MyWeb && npm run dev    # Vite dev server on :5173, proxies /api to :8000
+```
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `HOST` | `0.0.0.0` | Bind address |
-| `PORT` | `8000` | Bind port |
-| `MAC_AGENT_API_KEY` | `` (no auth) | API key for all non-root endpoints |
-| `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins |
+### Adding a new tool
+
+1. Create `../MyWeb/src/tools/<name>/` with a page component
+2. Add entry to `../MyWeb/src/tools/registry.ts`
+3. Add route in `../MyWeb/src/App.tsx`

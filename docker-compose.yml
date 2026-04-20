@@ -1,7 +1,7 @@
 services:
   sandbox:
     image: alpine:latest
-    container_name: mac-agent-sandbox
+    container_name: mydevteam-sandbox
     command: sleep infinity
     restart: unless-stopped
     network_mode: none

@@ -1,4 +1,4 @@
-# mac-agent Architecture
+# MyDevTeam Architecture
 
 ## Component Overview
 
@@ -17,29 +17,26 @@ graph TD
         HEAD["HeadAgent<br/>head.py"]
     end
 
-    subgraph Agents["Subagents"]
+    subgraph Agents["Subagents (plan-based)"]
         MAIL["MailAgent<br/>(mail tools)"]
         CMD["CommandAgent<br/>(command tools)"]
         ANS["AnswerAgent<br/>(answer tools)"]
     end
 
     subgraph Execution["Execution"]
-        EXECUTOR["executor.py"]
+        EXECUTOR["executor.py<br/>plan queue processor"]
+        MAILENGINE["MailEngine<br/>mail_engine.py"]
     end
 
     subgraph LLM["LLM"]
         ADAPTER["LLMAdapter<br/>llm.py"]
-        OLLAMA["Ollama<br/>(local)"]
+        OLLAMA["Ollama<br/>(qwen3:8b)"]
     end
 
     subgraph External["External Systems"]
-        APPLEMAIL["Apple Mail<br/>(AppleScript)"]
+        IMAP["IMAP<br/>(multi-account)"]
+        APPLEMAIL["Apple Mail<br/>(AppleScript fallback)"]
         DOCKER["Docker Sandbox"]
-    end
-
-    subgraph Knowledge["Knowledge Sources"]
-        WEB["Web Search"]
-        USERDATA["Personal Data"]
     end
 
     CLI -->|"stateless"| EXECUTOR
@@ -59,14 +56,28 @@ graph TD
     ANS --> EXECUTOR
 
     EXECUTOR --> ADAPTER
+    EXECUTOR --> MAILENGINE
+    MAILENGINE --> ADAPTER
     HEAD --> ADAPTER
     ADAPTER --> OLLAMA
 
-    EXECUTOR --> APPLEMAIL
+    MAILENGINE --> IMAP
+    MAILENGINE --> APPLEMAIL
     EXECUTOR --> DOCKER
-    EXECUTOR --> WEB
-    EXECUTOR --> USERDATA
 ```
+
+## Plan-Based Execution
+
+All subagents return a **Plan** — an ordered list of Actions. The executor processes the full queue before returning control to the user.
+
+```
+User: "delete emails 1, 2, and 3"
+  → LLM returns Plan: [mail_move(#1), mail_move(#2), mail_move(#3)]
+  → Executor: confirm #1 → delete → confirm #2 → delete → confirm #3 → delete
+  → Prompt user for next action
+```
+
+This avoids the single-action loop where the model would re-interpret the request after each action, leading to retries and hallucinated repeats.
 
 ## Runtime Flow
 
@@ -83,7 +94,7 @@ sequenceDiagram
 
     alt stateless
         Client->>Entry: prompt
-        Entry->>Exec: dispatch
+        Entry->>Exec: dispatch single action
     else multi-turn
         Client->>Entry: prompt
         Entry->>Store: load_session()
@@ -98,25 +109,43 @@ sequenceDiagram
 
         Entry->>Agent: append prompt, get context
         Agent->>LLM: complete(messages, scoped_schema)
-        LLM-->>Agent: Plan JSON
-        Agent->>Exec: dispatch actions
+        LLM-->>Agent: Plan JSON (list of actions)
+        Agent->>Exec: dispatch action queue
     end
 
-    alt needs external action
-        Exec->>Ext: fetch / execute
-        Ext-->>Exec: result
-        Exec->>Agent: replan with result
-        Agent->>LLM: complete(messages, scoped_schema)
-        LLM-->>Agent: Plan JSON
+    loop for each action in Plan
+        alt display action (summary, answer)
+            Exec-->>Client: show content
+        else external action (mail_move, command)
+            Exec-->>Client: confirm?
+            Client->>Exec: y/n
+            Exec->>Ext: execute action
+            Ext-->>Exec: result
+        else needs data (mail_read)
+            Exec->>Ext: fetch
+            Ext-->>Exec: data
+            Exec->>Agent: replan with new data
+            Agent->>LLM: complete(messages, scoped_schema)
+            LLM-->>Agent: extended Plan
+        end
     end
 
-    alt confirm required (command / mail_move / mail_save)
-        Exec-->>Client: confirm request
-        Client->>Entry: confirm=true
-        Exec->>Ext: execute action
-        Ext-->>Exec: result
-    end
-
+    Exec-->>Client: prompt for next input
     Entry->>Store: save_session()
-    Entry-->>Client: ActionResponse[]
 ```
+
+## Mail Flow
+
+Mail uses a stateful `MailEngine` instead of an LLM-driven conversation loop. The engine owns the inbox cache, pagination, formatting, and execution. The LLM is called with fresh context only for recommendations and intent parsing.
+
+1. User says "check my email"
+2. If multiple accounts configured → ask which (Gmail / Yahoo / all)
+3. `MailEngine.fetch()` reads emails with body preview and stores them in `SessionState.mail_engine`
+4. `MailEngine.recommend()` tags cached emails as keep/delete/save
+5. `MailEngine.display()` renders the current page deterministically
+6. User interacts: read, delete, next, previous, page N
+7. `MailEngine.handle()` parses intent with current-page context, resolves page-relative indices to cached UIDs, and returns structured results
+8. Destructive actions return confirmation; confirmed moves update the cache and redisplay from engine state
+9. User says "done" or the session is cleared → exit
+
+Folder names are resolved per-provider: `Trash` → `[Gmail]/Trash` on Gmail, `Trash` on Yahoo.

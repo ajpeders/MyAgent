@@ -12,6 +12,29 @@
 
 ---
 
+## Implementation Tracker
+
+Status here tracks implementation in this working tree. Per-task commit substeps below are intentionally left unchecked because no commit was requested.
+
+- [x] Task 1: Action model — add `indices` field, remove `mail_save`
+- [x] Task 2: MailEngine — display and state management
+- [x] Task 3: MailEngine — pagination
+- [x] Task 4: MailEngine — serialization
+- [x] Task 5: MailEngine — recommendation LLM call
+- [x] Task 6: MailEngine — intent parsing LLM call
+- [x] Task 7: MailEngine — fetch and execute
+- [x] Task 8: MailEngine — `handle()` entry point
+- [x] Task 9: Update SessionState for MailEngine
+- [x] Task 10: Wire MailEngine into `executor.py`
+- [x] Task 11: Wire MailEngine into CLI
+- [x] Task 12: Update `server.py` for structured mail responses
+- [x] Task 13: Update mail agent system prompt
+- [x] Task 14: Update `tools/schema.py` for `indices` field
+- [x] Task 15: Final integration test
+- [x] Task 16: Clean up and update docs
+
+---
+
 ## Chunk 1: Core MailEngine (state, display, execute)
 
 ### Task 1: Action model — add `indices` field, remove `mail_save`
