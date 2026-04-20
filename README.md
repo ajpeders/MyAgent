@@ -171,6 +171,8 @@ docs/superpowers/
 | POST | `/api/mail/fetch` | Fetch inbox into session mail engine |
 | GET | `/api/mail/{index}` | Read full email by page-relative index |
 | POST | `/api/mail/confirm` | Confirm pending destructive mail action |
+| POST | `/api/search` | Search the web, returns conversational answer + results |
+| GET | `/api/search/browse?url=<url>` | Fetch and summarize a URL via LLM |
 
 ### Admin
 | Method | Path | Description |
@@ -222,7 +224,7 @@ Env vars or `config.py`. Key vars:
 ### Planned
 
 - [ ] Web tool suite frontend (`../MyWeb`)
-- [ ] Web search tool integration (configurable provider: DuckDuckGo/Searx/Google + configurable LLM: Ollama or external SOTA API)
+- [x] Web search tool integration (configurable provider: DuckDuckGo/Searx/Google + configurable LLM: Ollama or external SOTA API)
 - [ ] Personal data tool
 - [ ] Rename repo/directory (Gitea: `MyAgent` → `MyDevTeam`, local dir rename)
 
