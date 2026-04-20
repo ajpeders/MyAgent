@@ -31,7 +31,9 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    if API_KEY and request.url.path.startswith("/api"):
+    if API_KEY and request.url.path.startswith("/api/admin"):
+        if request.url.path == "/api/admin/login":
+            return await call_next(request)  # public endpoint
         key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
         if key != API_KEY:
             return JSONResponse(
@@ -96,6 +98,16 @@ class AuthResponse(BaseModel):
     user_id: str
     session_id: str
     account: str
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AdminLoginResponse(BaseModel):
+    ok: bool
+    message: str
 
 
 class ImapAccountRequest(BaseModel):
@@ -480,6 +492,16 @@ async def chat(request: Request):
 
 
 # --- Admin endpoints ----------------------------------------------------------
+
+
+@app.post("/api/admin/login", response_model=AdminLoginResponse)
+def admin_login(req: AdminLoginRequest):
+    """Login as admin using username=admin and password=MYDEVTEAM_API_KEY."""
+    if req.username != "admin":
+        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+    if req.password != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+    return AdminLoginResponse(ok=True, message="Admin authenticated")
 
 
 @app.get("/api/admin/stats")

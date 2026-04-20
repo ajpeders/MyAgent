@@ -172,14 +172,17 @@ docs/superpowers/
 | GET | `/api/mail/{index}` | Read full email by page-relative index |
 | POST | `/api/mail/confirm` | Confirm pending destructive mail action |
 
-### Admin (requires `X-API-Key` header matching `MYDEVTEAM_API_KEY`)
+### Admin
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/stats` | User/session counts, DB size |
+| POST | `/api/admin/login` | Login as admin (username=admin, password=`$MYDEVTEAM_API_KEY`) |
+| GET | `/api/admin/stats` | User/session counts, DB size (requires `X-API-Key`) |
 | GET | `/api/admin/users` | List all users |
 | GET | `/api/admin/sessions` | List all sessions |
 | DELETE | `/api/admin/users/{id}` | Delete user (cascades) |
 | DELETE | `/api/admin/sessions/{id}` | Delete session |
+
+*All admin endpoints except login require `X-API-Key` header matching `MYDEVTEAM_API_KEY`.*
 
 ## Config
 
@@ -237,6 +240,10 @@ Env vars or `config.py`. Key vars:
 - Added SQLite stores for users, sessions, email cache
 - Added structured mail API endpoints
 - Fixed CLI session loading for local (no-auth) mode
+
+**Admin login endpoint**
+- `POST /api/admin/login` accepts username=admin + password=`$MYDEVTEAM_API_KEY`
+- Other admin endpoints still require `X-API-Key` header
 
 **Admin & mail read endpoints**
 - Added admin API endpoints (stats, users, sessions, delete) with API key auth
