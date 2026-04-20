@@ -16,6 +16,7 @@ from core.crypto import decrypt_payload, encrypt_payload
 from core.db import UserStore, EmailCacheStore, SessionStore
 from core.executor import dispatch_session
 from core.mail_engine import MailEngine
+from core.search import browse_url, search_web
 from core.session_store import SessionState, load_session, save_session
 
 app = FastAPI()
@@ -141,6 +142,27 @@ class FetchRequest(BaseModel):
 class MoveRequest(BaseModel):
     indices: list[int]
     folder: str = "Trash"
+
+
+class SearchRequest(BaseModel):
+    query: str
+
+
+class SearchResultResponse(BaseModel):
+    title: str
+    url: str
+    snippet: str
+
+
+class SearchResponse(BaseModel):
+    answer: str
+    results: list[SearchResultResponse]
+
+
+class BrowseResponse(BaseModel):
+    summary: str
+    url: str
+    title: str | None
 
 
 class MailPageResponse(BaseModel):
@@ -549,3 +571,42 @@ def admin_delete_session(request: Request, session_id: str):
     _require_admin(request)
     _session_store.delete_session(session_id)
     return {"ok": True}
+
+
+@app.post("/api/search", response_model=SearchResponse)
+def api_search(req: SearchRequest):
+    """Search the web and return a conversational answer + results list."""
+    try:
+        result = search_web(req.query)
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Search provider timed out")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Search provider error: {e}")
+
+    return SearchResponse(
+        answer=result["answer"],
+        results=[
+            SearchResultResponse(title=r["title"], url=r["url"], snippet=r["snippet"])
+            for r in result["results"]
+        ],
+    )
+
+
+@app.get("/api/search/browse", response_model=BrowseResponse)
+def api_browse(request: Request, url: str):
+    """Fetch a URL and summarize its content via LLM."""
+    try:
+        result = browse_url(url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Fetch timed out")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Browse error: {e}")
+
+    return BrowseResponse(
+        summary=result["summary"],
+        url=result["url"],
+        title=result.get("title"),
+    )
+
