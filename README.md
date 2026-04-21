@@ -215,11 +215,7 @@ Env vars or `config.py`. Key vars:
 - [x] Admin endpoints (stats, user/session management) with API key auth
 - [x] Mail read endpoint (`GET /api/mail/:index`) for full email body
 - [x] Admin page frontend (`../MyWeb`)
-
-### In Progress
-
 - [x] End-to-end testing of full login → IMAP → mail flow
-- [ ] Redis for production session storage (future, optional)
 
 ### Planned
 
@@ -227,6 +223,7 @@ Env vars or `config.py`. Key vars:
 - [x] Web search tool integration (configurable provider: DuckDuckGo/Searx/Google + configurable LLM: Ollama or external SOTA API)
 - [x] Personal data tool (per-user semantic memory via embeddings)
 - [ ] Rename repo/directory (Gitea: `MyAgent` → `MyDevTeam`, local dir rename)
+- [ ] Redis for session storage (optional/future — SQLite WAL mode sufficient for now)
 
 ## Changelog
 
