@@ -225,7 +225,7 @@ Env vars or `config.py`. Key vars:
 
 - [ ] Web tool suite frontend (`../MyWeb`)
 - [x] Web search tool integration (configurable provider: DuckDuckGo/Searx/Google + configurable LLM: Ollama or external SOTA API)
-- [ ] Personal data tool
+- [x] Personal data tool (per-user semantic memory via embeddings)
 - [ ] Rename repo/directory (Gitea: `MyAgent` → `MyDevTeam`, local dir rename)
 
 ## Changelog
