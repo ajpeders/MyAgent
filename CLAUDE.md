@@ -18,14 +18,35 @@ Personal local LLM agent with structured tool dispatch. See **README.md** for fu
 
 ```
 src/
-  cli/          Typer CLI entry point
-  core/
-    actions/    Action model + mail backends (IMAP, AppleScript)
-    agents/     HeadAgent + subagents (Mail, Command, Answer)
-    tools/      Tool definitions, registry, JSON schema builder
-    config.py, crypto.py, db.py, executor.py, llm.py, mail_engine.py, memory.py, session_store.py
-  server/       FastAPI entry point + auth/IMAP/mail endpoints
-tests/          pytest suite
+  services/        Logical service packages (auth, mail, memory, search)
+    auth/          User identity, login, IMAP credential encryption
+      service.py   AuthService — register, login, IMAP CRUD
+      store.py     UserStore — users table access
+      models.py    Pydantic request/response models
+      errors.py    AuthServiceError subtypes
+    mail/          IMAP fetch, email display, move/delete
+      service.py   MailService — thin wrapper over MailEngine
+      errors.py    MailServiceError subtypes
+    memory/        Per-user semantic facts with embeddings
+      service.py   MemoryService + MemoryStore — owns memories table
+    search/        Web search + URL browsing, configurable provider
+      service.py   SearchService
+      providers.py DuckDuckGo, Searx, Google providers
+  gateway/         FastAPI server — routes, middleware, session management
+    __main__.py    FastAPI app entry point (python -m src.gateway)
+    routes/        auth.py, memory.py, search.py, mail.py, chat.py
+    session.py     SessionStore, SessionState — owns sessions table
+    middleware.py  require_api_key, get_session_id, get_user_id
+  core/            Shared utilities — no business logic
+    config.py      All config values
+    crypto.py      AES-256-GCM encryption, password hashing
+    db.py          Schema (_init_schema, _connect) — all tables owned by services
+    executor.py    Agent dispatch — routes prompts to subagents
+    llm.py         LLM adapter (ollama/openai/anthropic)
+    agents/        HeadAgent + subagents (stateless routing)
+    tools/         Tool definitions, registry, JSON schema builder
+    docker.py      Sandbox execution
+tests/            pytest suite
 ```
 
 ## Adding a New Agent
@@ -44,7 +65,7 @@ python cli.py chat "check my email" --session mysession
 
 # Server
 ./start.sh
-uvicorn server:app --reload  # dev
+python -m src.gateway  # or: uvicorn src.gateway:app --reload
 
 # Tests
 .venv/bin/python -m pytest tests/ -v

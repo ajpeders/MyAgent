@@ -11,7 +11,7 @@ python cli.py chat "check my email" --session mysession
 
 # Server
 ./start.sh
-uvicorn server:app --reload  # dev
+python -m src.gateway  # or: uvicorn src.gateway:app --reload
 
 # Tests
 .venv/bin/python -m pytest tests/ -v
@@ -91,33 +91,49 @@ graph TD
 
 ### Key Design Decisions
 
-- **Entry points**: `cli/__main__.py` (Typer CLI), `server/__main__.py` (FastAPI)
+- **Service architecture**: Code split into logical service packages (`auth`, `mail`, `memory`, `search`) with a thin FastAPI gateway. Each service owns its tables, exposes typed error classes, and communicates via Protocol interfaces.
+- **Entry points**: `cli/__main__.py` (Typer CLI), `gateway/__main__.py` (FastAPI)
 - **Routing**: `HeadAgent` classifies intent, dispatches to scoped subagent (Mail, Command, Answer)
 - **Plan-based execution**: Subagents return a `Plan` (ordered list of `Action`s) — the executor runs the full queue, avoiding re-interpretation loops
-- **Mail Engine**: `mail_engine.py` owns inbox state, display, pagination, and execution deterministically. The LLM is only called for recommendations and intent parsing with fresh context (no history accumulates)
+- **Mail Engine**: `src/core/mail_engine.py` owns inbox state, display, pagination, and execution deterministically. The LLM is only called for recommendations and intent parsing with fresh context (no history accumulates)
 - **LLM**: All calls go through `llm.default_adapter` — never call Ollama directly
 - **Tools**: `tools/registry.py` defines tools; `tools/schema.py` builds per-agent JSON schemas
-- **State**: SQLite (`core/db.py`) for users, sessions, and encrypted email cache
+- **State**: SQLite (`core/db.py`) for users, sessions, and encrypted email cache — each service accesses only its owned tables
 - **Security**: IMAP credentials encrypted at rest with AES-256-GCM, keys derived from user password via PBKDF2
 
 ### Project Layout
 
 ```
 src/
-  cli/          Typer CLI entry point
-  core/
-    actions/    Action model + mail backends (IMAP, AppleScript)
-    agents/     HeadAgent + subagents (Mail, Command, Answer)
-    tools/      Tool definitions, registry, JSON schema builder
-    config.py   Env-based configuration
-    crypto.py   AES-GCM encryption for credentials at rest
-    db.py       SQLite stores (users, sessions, email cache)
-    executor.py Plan dispatch + MailEngine integration
-    llm.py      Ollama adapter
-    mail_engine.py  Hybrid mail engine (deterministic state + LLM intent parsing)
-    memory.py   Per-agent persistent memory
-    session_store.py  Session load/save bridge
-  server/       FastAPI entry point + auth/IMAP/mail endpoints
+  services/        Logical service packages — each owns its tables
+    auth/          User identity, login, IMAP credential encryption
+      service.py   AuthService — register, login, IMAP account CRUD
+      store.py     UserStore — users table
+      models.py    Pydantic models (AuthResult, ImapAccount, etc.)
+      errors.py    AuthServiceError subtypes
+    mail/          IMAP fetch, email display, move/delete
+      service.py   MailService — thin wrapper over MailEngine
+      errors.py    MailServiceError subtypes
+    memory/        Per-user semantic facts with embeddings
+      service.py   MemoryService + MemoryStore — owns memories table
+    search/        Web search + URL browsing
+      service.py   SearchService — search() and browse()
+      providers.py DuckDuckGo, Searx, Google providers
+  gateway/         FastAPI server — routes, middleware, session management
+    __main__.py    App entry point (python -m src.gateway)
+    routes/        auth, memory, search, mail, chat
+    session.py     SessionStore — owns sessions table
+    middleware.py  require_api_key, get_session_id, get_user_id
+  core/            Shared utilities — no business logic
+    config.py      Env-based configuration
+    crypto.py      AES-GCM encryption for credentials at rest
+    db.py          Schema (_init_schema, _connect) — consumed by services
+    executor.py     Plan dispatch — routes to agents
+    llm.py         LLM adapter (ollama/openai/anthropic)
+    mail_engine.py Hybrid mail engine (deterministic state + LLM intent parsing)
+    agents/        HeadAgent + subagents (stateless routing)
+    tools/         Tool definitions, registry, JSON schema builder
+    docker.py      Sandbox execution
 tests/          pytest suite
 docs/superpowers/
   specs/        Design specifications
@@ -157,20 +173,36 @@ docs/superpowers/
 
 ## API Endpoints
 
-### Auth
+### Auth & Account
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/register` | Create user (email + password) |
-| POST | `/api/login` | Login, returns session_id + decrypted IMAP accounts |
-| POST | `/api/imap/add` | Add IMAP account (encrypted at rest) |
+| POST | `/api/account/register` | Create user (email + password) |
+| POST | `/api/account/login` | Login, returns session_id + decrypted IMAP accounts |
+| POST | `/api/account/logout` | Logout and delete session |
+| GET | `/api/account/me` | Get current user info |
+| GET | `/api/imap` | List IMAP accounts (metadata only) |
+| POST | `/api/imap` | Add IMAP account (encrypted at rest) |
+| DELETE | `/api/imap/{account_id}` | Remove IMAP account |
+
+### Memory
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/memory` | Add a memory |
+| GET | `/api/memory?q=<query>` | Semantic search memories |
+| DELETE | `/api/memory/{memory_id}` | Delete a memory |
 
 ### Chat & Mail
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/chat` | Send prompt to agent (routes via HeadAgent) |
-| POST | `/api/mail/fetch` | Fetch inbox into session mail engine |
+| GET | `/api/mail` | Get current inbox page |
+| POST | `/api/mail/fetch` | Fetch inbox from IMAP into session |
 | GET | `/api/mail/{index}` | Read full email by page-relative index |
-| POST | `/api/mail/confirm` | Confirm pending destructive mail action |
+| POST | `/api/mail/move` | Move emails to folder (default Trash) |
+
+### Search
+| Method | Path | Description |
+|--------|------|-------------|
 | POST | `/api/search` | Search the web, returns conversational answer + results |
 | GET | `/api/search/browse?url=<url>` | Fetch and summarize a URL via LLM |
 
@@ -216,16 +248,25 @@ Env vars or `config.py`. Key vars:
 - [x] Mail read endpoint (`GET /api/mail/:index`) for full email body
 - [x] Admin page frontend (`../MyWeb`)
 - [x] End-to-end testing of full login → IMAP → mail flow
+- [x] Service architecture: auth, mail, memory, search services with FastAPI gateway
 
 ### Planned
 
 - [ ] Web tool suite frontend (`../MyWeb`)
-- [x] Web search tool integration (configurable provider: DuckDuckGo/Searx/Google + configurable LLM: Ollama or external SOTA API)
-- [x] Personal data tool (per-user semantic memory via embeddings)
-- [ ] Rename repo/directory (Gitea: `MyAgent` → `MyDevTeam`, local dir rename)
 - [ ] Redis for session storage (optional/future — SQLite WAL mode sufficient for now)
 
 ## Changelog
+
+### 2026-04-21
+
+**Service Architecture**
+- Split monolith into logical service packages: `services/auth`, `services/mail`, `services/memory`, `services/search`
+- FastAPI gateway in `gateway/` assembles all routes (`/api/account/*`, `/api/mail/*`, `/api/memory/*`, `/api/search/*`, `/api/chat`)
+- Each service owns its tables and exposes typed error classes mapped to HTTP by the gateway
+- `gateway/session.py` owns `SessionStore` (sessions table)
+- `gateway/middleware.py` provides `require_api_key`, `get_session_id`, `get_user_id`
+- `core/` retained for shared utilities only (config, crypto, llm, executor, agents, tools, docker)
+- Fixed duplicate `recall`/`list_memories`/`forget` bug in memory service
 
 ### 2026-04-20
 
