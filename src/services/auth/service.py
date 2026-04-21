@@ -47,7 +47,29 @@ class AuthService:
         from core.crypto import verify_password
         if not verify_password(password, stored_hash):
             raise InvalidCredentialsError("Invalid email or password")
-        session_id = self._session_store.create_session(user["user_id"])
+        # Decrypt stored IMAP credentials using the provided password
+        imap_accounts: list[dict] = []
+        blob = user["encrypted_imap_creds"]
+        if blob:
+            try:
+                if isinstance(blob, bytes):
+                    blob = blob.decode()
+                stored = json.loads(blob)
+                for acc in stored:
+                    enc = acc.get("encrypted", {})
+                    if enc:
+                        plaintext = decrypt_payload(enc, password)
+                        imap_accounts.append({
+                            "name": acc.get("name", ""),
+                            "host": plaintext.get("host", ""),
+                            "port": plaintext.get("port", 993),
+                            "user": plaintext.get("username", ""),
+                            "password": plaintext.get("password", ""),
+                        })
+            except Exception:
+                raise DecryptionError("Failed to decrypt IMAP credentials — wrong password?")
+
+        session_id = self._session_store.create_session(user["user_id"], imap_accounts=imap_accounts or None)
         return AuthResult(user_id=user["user_id"], session_id=session_id, account=email)
 
     def get_user(self, user_id: str) -> User:
