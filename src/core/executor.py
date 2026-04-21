@@ -165,6 +165,21 @@ def dispatch_session(
 
         return results
 
+    # Handle note/remember at session level (user-scoped) — intercept before routing
+    # These are handled directly here so they have access to state.user_id
+    lower_prompt = prompt.lower().strip()
+    if lower_prompt.startswith("note ") or lower_prompt.startswith("remember "):
+        from core.memory import note as mem_note, remember as mem_remember
+
+        if lower_prompt.startswith("note "):
+            content = prompt[5:].strip()
+            mem_note(f"[note] {content}")
+            return [{"type": "note", "content": f"Note saved: {content}", "agent": "memory"}]
+        else:  # remember
+            content = prompt[9:].strip()
+            mem_remember(content, state.user_id)
+            return [{"type": "remember", "content": f"Remembered: {content}", "agent": "memory"}]
+
     # Fresh routing
     route = _head_agent.route(prompt, model)
     agent_name = route.agent
@@ -205,11 +220,16 @@ def _dispatch_plan(
             results.append({"type": action.type.value, "content": action.content, "agent": agent_name})
 
         elif action.type == ActionType.note:
-            remember(f"[note] {action.content}", agent=agent_name)
+            from core.memory import note as mem_note
+
+            mem_note(f"[note] {action.content}", agent=agent_name)
             results.append({"type": "note", "content": action.content, "agent": agent_name})
 
         elif action.type == ActionType.remember:
-            remember(action.content, agent=agent_name)
+            # Agent emitted remember — store in agent-scope notes (disk-based)
+            from core.memory import note as mem_note
+
+            mem_note(action.content, agent=agent_name)
             results.append({"type": "remember", "content": action.content, "agent": agent_name})
 
         elif action.type == ActionType.ask_user:
@@ -248,6 +268,14 @@ def _dispatch_plan(
             results.append({"type": "answer", "content": answer_text, "agent": agent_name})
 
         elif action.type == ActionType.personal_data:
-            results.append({"type": "personal_data", "content": f"Personal data access not yet implemented.", "agent": agent_name})
+            from core.memory import recall
+
+            memories = recall(action.content, state.user_id, top_k=5)
+            if not memories:
+                answer_text = "I don't have any memories on that topic. Try remembering something first."
+            else:
+                lines = [f"- {m['content']} (relevance: {round(m['score'] * 100)}%)" for m in memories]
+                answer_text = "Here's what I remember:\n" + "\n".join(lines)
+            results.append({"type": "answer", "content": answer_text, "agent": agent_name})
 
     return results

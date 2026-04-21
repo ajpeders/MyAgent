@@ -17,6 +17,7 @@ from core.db import UserStore, EmailCacheStore, SessionStore
 from core.executor import dispatch_session
 from core.mail_engine import MailEngine
 from core.search import browse_url, search_web
+from core.memory import forget, list_memories, recall, remember
 from core.session_store import SessionState, load_session, save_session
 
 app = FastAPI()
@@ -273,6 +274,62 @@ def logout(request: Request):
     session_id = _get_session_id(request)
     if session_id:
         _session_store.delete_session(session_id)
+    return {"ok": True}
+
+
+# ── Memory ─────────────────────────────────────────────────────────────────────
+
+
+class MemoryAddRequest(BaseModel):
+    content: str
+
+
+class MemoryResponse(BaseModel):
+    memory_id: str
+    content: str
+    score: float | None = None
+    created_at: float | None = None
+
+
+@app.post("/api/memory", response_model=MemoryResponse)
+def memory_add(request: Request, body: MemoryAddRequest):
+    """Add a memory to the user's store."""
+    user_id = _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-ID header")
+    memory_id = remember(body.content, user_id)
+    return MemoryResponse(memory_id=memory_id, content=body.content, score=None, created_at=None)
+
+
+@app.get("/api/memory", response_model=list[MemoryResponse])
+def memory_list(request: Request, q: str = "", top_k: int = 5):
+    """List memories. If q is given, semantic search; otherwise list all."""
+    user_id = _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-ID header")
+    if q:
+        results = recall(q, user_id, top_k=top_k)
+        return [
+            MemoryResponse(memory_id=r["memory_id"], content=r["content"], score=r["score"], created_at=r["created_at"])
+            for r in results
+        ]
+    else:
+        results = list_memories(user_id)
+        return [
+            MemoryResponse(memory_id=r["memory_id"], content=r["content"], score=None, created_at=r["created_at"])
+            for r in results
+        ]
+
+
+@app.delete("/api/memory/{memory_id}")
+def memory_delete(request: Request, memory_id: str):
+    """Delete a specific memory."""
+    user_id = _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing X-User-ID header")
+    deleted = forget(memory_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Memory not found")
     return {"ok": True}
 
 

@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import sqlite3
-import redis
 
 from core.crypto import decrypt_payload, encrypt_payload, hash_password, verify_password
 
@@ -66,6 +65,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             imap_accounts TEXT,
             created_at    REAL NOT NULL,
             updated_at    REAL NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            memory_id     TEXT PRIMARY KEY,
+            user_id       TEXT NOT NULL,
+            content       TEXT NOT NULL,
+            embedding     BLOB,
+            created_at    REAL NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
         )
     """)
@@ -258,157 +267,197 @@ class SessionState:
     pending: dict | None = None  # pending action awaiting confirmation
 
 
-SESSION_TTL = 7 * 24 * 3600  # 7 days in seconds
-
-
-class RedisSessionStore:
-    """Redis-backed session store. Sessions auto-expire after SESSION_TTL of inactivity."""
-
-    _pool_instance: redis.ConnectionPool | None = None
-
-    @classmethod
-    def _pool(cls) -> redis.ConnectionPool:
-        if cls._pool_instance is None:
-            from core.config import REDIS_URL
-
-            cls._pool_instance = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)
-        return cls._pool_instance
-
-    def _client(self) -> redis.Redis:
-        return redis.Redis(connection_pool=self._pool())
-
-    @staticmethod
-    def _key(session_id: str) -> str:
-        return f"session:{session_id}"
-
-    @staticmethod
-    def _user_set_key(user_id: str) -> str:
-        return f"user_sessions:{user_id}"
-
-    @staticmethod
-    def _serialize(val) -> str:
-        return json.dumps(val) if val is not None else ""
-
-    @staticmethod
-    def _deserialize(raw: str):
-        return json.loads(raw) if raw else None
+class SessionStore:
+    """Manages conversation sessions linked to users."""
 
     def create_session(self, user_id: str, imap_accounts: list[dict] | None = None) -> str:
+        """Create a new session for a user. Returns session_id."""
         session_id = str(uuid.uuid4())
         now = time.time()
-        client = self._client()
-        pipe = client.pipeline()
-        pipe.hset(
-            self._key(session_id),
-            mapping={
-                "session_id": session_id,
-                "user_id": user_id,
-                "mail_engine": "",
-                "imap_accounts": self._serialize(imap_accounts),
-                "pending": "",
-                "created_at": str(now),
-            },
+        conn = _connect()
+        conn.execute(
+            "INSERT INTO sessions (session_id, user_id, imap_accounts, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (session_id, user_id, json.dumps(imap_accounts) if imap_accounts else None, now, now),
         )
-        pipe.expire(self._key(session_id), SESSION_TTL)
-        pipe.sadd(self._user_set_key(user_id), session_id)
-        pipe.execute()
+        conn.commit()
+        conn.close()
         return session_id
 
     def get_session(self, session_id: str) -> SessionState | None:
-        client = self._client()
-        data = client.hgetall(self._key(session_id))
-        if not data:
+        """Load session state, or None if not found."""
+        conn = _connect()
+        row = conn.execute(
+            "SELECT session_id, user_id, mail_engine, imap_accounts, pending FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
             return None
-        client.expire(self._key(session_id), SESSION_TTL)  # reset TTL on access
         return SessionState(
-            session_id=data["session_id"],
-            user_id=data["user_id"],
-            mail_engine=self._deserialize(data.get("mail_engine", "")),
-            imap_accounts=self._deserialize(data.get("imap_accounts", "")),
-            pending=self._deserialize(data.get("pending", "")),
+            session_id=row[0],
+            user_id=row[1],
+            mail_engine=json.loads(row[2]) if row[2] else None,
+            imap_accounts=json.loads(row[3]) if row[3] else None,
+            pending=json.loads(row[4]) if row[4] else None,
         )
 
     def save_session(self, state: SessionState) -> None:
-        client = self._client()
+        """Persist session state."""
         now = time.time()
-        key = self._key(state.session_id)
-        pipe = client.pipeline()
-        pipe.hset(
-            key,
-            mapping={
-                "session_id": state.session_id,
-                "user_id": state.user_id,
-                "mail_engine": self._serialize(state.mail_engine),
-                "imap_accounts": self._serialize(state.imap_accounts),
-                "pending": self._serialize(state.pending),
-            },
+        conn = _connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO sessions (session_id, user_id, mail_engine, imap_accounts, pending, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                state.session_id,
+                state.user_id,
+                json.dumps(state.mail_engine) if state.mail_engine else None,
+                json.dumps(state.imap_accounts) if state.imap_accounts else None,
+                json.dumps(state.pending) if state.pending else None,
+                now,
+                now,
+            ),
         )
-        if not client.hexists(key, "created_at"):
-            pipe.hset(key, "created_at", str(now))
-        pipe.expire(key, SESSION_TTL)
-        pipe.sadd(self._user_set_key(state.user_id), state.session_id)
-        pipe.execute()
+        conn.commit()
+        conn.close()
 
     def delete_session(self, session_id: str) -> None:
-        client = self._client()
-        user_id = client.hget(self._key(session_id), "user_id")
-        pipe = client.pipeline()
-        pipe.delete(self._key(session_id))
-        if user_id:
-            pipe.srem(self._user_set_key(user_id), session_id)
-        pipe.execute()
+        """Delete session."""
+        conn = _connect()
+        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+        conn.close()
 
     def get_sessions_for_user(self, user_id: str) -> list[SessionState]:
-        client = self._client()
-        session_ids = client.smembers(self._user_set_key(user_id))
-        results = []
-        for sid in session_ids:
-            data = client.hgetall(self._key(sid))
-            if data:
-                results.append(
-                    SessionState(
-                        session_id=data["session_id"],
-                        user_id=data["user_id"],
-                        mail_engine=self._deserialize(data.get("mail_engine", "")),
-                        imap_accounts=self._deserialize(data.get("imap_accounts", "")),
-                        pending=None,
-                    )
-                )
-        return results
+        """List all sessions for a user."""
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT session_id, user_id, mail_engine, imap_accounts FROM sessions WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+        conn.close()
+        return [
+            SessionState(
+                session_id=r[0],
+                user_id=r[1],
+                mail_engine=json.loads(r[2]) if r[2] else None,
+                imap_accounts=json.loads(r[3]) if r[3] else None,
+            )
+            for r in rows
+        ]
 
     def count_sessions(self) -> int:
-        client = self._client()
-        count = 0
-        cursor = 0
-        while True:
-            cursor, keys = client.scan(cursor=cursor, match="session:*", count=100)
-            count += len(keys)
-            if cursor == 0:
-                break
+        conn = _connect()
+        count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        conn.close()
         return count
 
     def list_sessions(self) -> list[dict]:
-        client = self._client()
-        sessions = []
-        cursor = 0
-        while True:
-            cursor, keys = client.scan(cursor=cursor, match="session:*", count=100)
-            for key in keys:
-                data = client.hgetall(key)
-                if data:
-                    sessions.append(
-                        {
-                            "session_id": data["session_id"],
-                            "user_id": data["user_id"],
-                            "has_mail_engine": bool(data.get("mail_engine", "")),
-                            "created_at": float(data["created_at"]) if data.get("created_at") else None,
-                            "updated_at": None,
-                        }
-                    )
-            if cursor == 0:
-                break
-        return sessions
+        """Return all sessions (metadata only, no credentials)."""
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT session_id, user_id, mail_engine IS NOT NULL, created_at, updated_at FROM sessions"
+        ).fetchall()
+        conn.close()
+        return [
+            {
+                "session_id": r[0],
+                "user_id": r[1],
+                "has_mail_engine": bool(r[2]),
+                "created_at": r[3],
+                "updated_at": r[4],
+            }
+            for r in rows
+        ]
 
 
-# Alias so imports in other modules (e.g. server/__main__.py) work unchanged
-SessionStore = RedisSessionStore
+class MemoryStore:
+    """Per-user memory with embedding-based semantic search."""
+
+    _EMBED_MODEL = "nomic-embed-text"
+
+    @staticmethod
+    def _embed(text: str) -> list[float]:
+        """Generate embedding vector for text using nomic-embed-text."""
+        import ollama
+
+        resp = ollama.embeddings(model=MemoryStore._EMBED_MODEL, prompt=text)
+        return resp["embedding"]
+
+    @staticmethod
+    def _cosine(a: list[float], b: list[float]) -> float:
+        """Cosine similarity between two vectors."""
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = sum(x * x for x in a) ** 0.5
+        norm_b = sum(x * x for x in b) ** 0.5
+        return dot / (norm_a * norm_b + 1e-8)
+
+    def add_memory(self, user_id: str, content: str) -> str:
+        """Store a memory with its embedding. Returns memory_id."""
+        memory_id = str(uuid.uuid4())
+        now = time.time()
+        embedding = self._embed(content)
+        import struct
+
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        conn = _connect()
+        conn.execute(
+            "INSERT INTO memories (memory_id, user_id, content, embedding, created_at) VALUES (?, ?, ?, ?, ?)",
+            (memory_id, user_id, content, blob, now),
+        )
+        conn.commit()
+        conn.close()
+        return memory_id
+
+    def search(self, user_id: str, query: str, top_k: int = 5) -> list[dict]:
+        """Semantic search over user memories. Returns top-k matches."""
+        import struct
+
+        query_vec = self._embed(query)
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT memory_id, content, embedding, created_at FROM memories WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+        conn.close()
+
+        scored = []
+        for row in rows:
+            memory_id, content, blob, created_at = row
+            vec = struct.unpack(f"{len(blob) // 4}f", blob)
+            score = self._cosine(query_vec, list(vec))
+            scored.append((score, memory_id, content, created_at))
+
+        scored.sort(reverse=True)
+        return [
+            {
+                "memory_id": mid,
+                "content": content,
+                "score": round(score, 4),
+                "created_at": created_at,
+            }
+            for score, mid, content, created_at in scored[:top_k]
+        ]
+
+    def list_memories(self, user_id: str) -> list[dict]:
+        """List all memories for a user, newest first."""
+        conn = _connect()
+        rows = conn.execute(
+            "SELECT memory_id, content, created_at FROM memories WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        conn.close()
+        return [
+            {"memory_id": r[0], "content": r[1], "created_at": r[2]} for r in rows
+        ]
+
+    def delete_memory(self, memory_id: str, user_id: str) -> bool:
+        """Delete a specific memory. Returns True if deleted."""
+        conn = _connect()
+        cur = conn.execute(
+            "DELETE FROM memories WHERE memory_id = ? AND user_id = ?",
+            (memory_id, user_id),
+        )
+        conn.commit()
+        conn.close()
+        return cur.rowcount > 0
+

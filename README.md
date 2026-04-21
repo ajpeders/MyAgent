@@ -219,7 +219,7 @@ Env vars or `config.py`. Key vars:
 ### In Progress
 
 - [x] End-to-end testing of full login → IMAP → mail flow
-- [x] Redis for production session storage (7-day TTL, auto-reset on access)
+- [ ] Redis for production session storage (future, optional)
 
 ### Planned
 
