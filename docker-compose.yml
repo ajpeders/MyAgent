@@ -1,4 +1,13 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: mydevteam-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
   sandbox:
     image: alpine:latest
     container_name: mydevteam-sandbox
@@ -13,3 +22,4 @@ services:
 
 volumes:
   sandbox-data:
+  redis-data:
