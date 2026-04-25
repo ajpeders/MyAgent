@@ -116,6 +116,11 @@ src/
     search/        Web search + URL browsing
       service.py   SearchService — search() and browse()
       providers.py DuckDuckGo, Searx, Google providers
+    calendar/      Per-user calendar events
+      service.py   CalendarService — create, list, delete
+      store.py     CalendarStore — owns calendar_events table
+      models.py    CreateEventRequest, CalendarEvent
+      errors.py    EventNotFoundError
     llm/           LLM abstraction layer
       service.py   LLMService — chat, complete, embeddings, streaming
       adapters.py  Pluggable adapters (Ollama, OpenAI, Anthropic)
@@ -211,6 +216,15 @@ docs/superpowers/
 | GET | `/api/mail/by-date?start=...&end=...` | Emails in a date range |
 | GET | `/api/mail/{index}` | Read full email by page-relative index |
 | POST | `/api/mail/move` | Move emails to folder (default Trash) |
+
+### Calendar
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/calendar/events?start=...&end=...` | List events in date range |
+| POST | `/api/calendar/events` | Create event (`{ title, date, time?, description? }`) |
+| DELETE | `/api/calendar/events/{id}` | Delete an event |
+
+*All calendar endpoints require `Authorization: Bearer <JWT>`.*
 
 ### Search
 | Method | Path | Description |

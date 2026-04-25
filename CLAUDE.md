@@ -33,6 +33,9 @@ src/
     search/        Web search + URL browsing, configurable provider
       service.py   SearchService
       providers.py DuckDuckGo, Searx, Google providers
+    calendar/      Per-user calendar events
+      service.py   CalendarService — create, list, delete
+      store.py     CalendarStore — owns calendar_events table
     llm/           LLM abstraction layer
       service.py   LLMService — chat, complete, embeddings, streaming
       adapters.py  Pluggable adapters (Ollama, OpenAI, Anthropic)
