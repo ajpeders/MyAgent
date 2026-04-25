@@ -1,5 +1,5 @@
 from .base import AgentDef
-from core.tools import COMMAND_TOOLS, build_system_prompt
+from src.core.tools import COMMAND_TOOLS, build_system_prompt
 
 
 class CommandAgent(AgentDef):

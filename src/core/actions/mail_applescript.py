@@ -1,6 +1,6 @@
 import subprocess
 
-from core.config import TARGET_MAILBOX
+from src.core.config import TARGET_MAILBOX
 
 
 def fetch_mailboxes(exclude: str = "") -> list[str]:

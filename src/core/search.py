@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from core.config import (
+from src.core.config import (
     SEARCH_PROVIDER,
     SEARCH_SEARX_URL,
     GOOGLE_API_KEY,
@@ -12,7 +12,7 @@ from core.config import (
     SEARCH_OPENAI_MODEL,
     SEARCH_ANTHROPIC_MODEL,
 )
-from core.llm import default_adapter
+from src.services.llm.adapters import default_adapter
 
 # ── Data classes ──────────────────────────────────────────────────────────────
 
@@ -139,7 +139,7 @@ def _generate_answer(query: str, results: list[SearchResult]) -> str:
             "content": f"Based on these search results:\n{context}\n\nAnswer this question: {query}",
         },
     ]
-    return default_adapter.complete(messages, schema={}, model=_llm_model())
+    return default_adapter.complete_sync(messages, schema={}, model=_llm_model())
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -242,4 +242,4 @@ def _browse_summarize(text: str, url: str, title: str) -> str:
             "content": f"Summarize this page (URL: {url}, Title: {title}):\n\n{text[:3000]}",
         },
     ]
-    return default_adapter.complete(messages, schema={}, model=_llm_model())
+    return default_adapter.complete_sync(messages, schema={}, model=_llm_model())

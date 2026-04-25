@@ -13,6 +13,15 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", 8000))
 API_KEY = os.environ.get("MYDEVTEAM_API_KEY", "")  # empty = no auth (local dev only)
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
+JWT_EXPIRY_HOURS = int(os.environ.get("JWT_EXPIRY_HOURS", "168"))  # 7 days
+
+# Admin emails — users with these emails are auto-promoted to admin on login/register
+ADMIN_EMAILS: list[str] = [
+    e.strip().lower()
+    for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+]
 
 # Redis URL for session credential storage
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")

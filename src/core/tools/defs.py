@@ -20,9 +20,25 @@ class ParamDef:
     required: bool = False
     default: str | int | bool | None = None
 
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "type": self.type,
+            "description": self.description,
+            "required": self.required,
+            "default": self.default,
+        }
+
 
 @dataclass
 class ToolDef:
     name: str
     description: str
     params: list[ParamDef] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "params": [p.to_dict() for p in self.params],
+        }

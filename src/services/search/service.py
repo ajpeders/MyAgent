@@ -2,9 +2,9 @@
 import re
 from html import unescape
 
-from core.config import SEARCH_LLM_PROVIDER, SEARCH_LLM_MODEL, SEARCH_OPENAI_MODEL, SEARCH_ANTHROPIC_MODEL
-from core.llm import default_adapter
-from services.search.providers import get_provider, SearchResult
+from src.core.config import SEARCH_LLM_PROVIDER, SEARCH_LLM_MODEL, SEARCH_OPENAI_MODEL, SEARCH_ANTHROPIC_MODEL
+from src.services.llm.service import LLMService
+from src.services.search.providers import get_provider, SearchResult
 
 
 class SearchServiceError(Exception):
@@ -17,6 +17,9 @@ class ProviderTimeoutError(SearchServiceError):
 
 class BrowseError(SearchServiceError):
     pass
+
+
+_llm = LLMService()
 
 
 def _llm_model() -> str:
@@ -40,7 +43,7 @@ def _generate_answer(query: str, results: list[SearchResult]) -> str:
             "content": f"Based on these search results:\n{context}\n\nAnswer this question: {query}",
         },
     ]
-    return default_adapter.complete(messages, schema={}, model=_llm_model())
+    return _llm.complete(messages, schema={}, model=_llm_model())
 
 
 class SearchService:
@@ -124,4 +127,4 @@ def _browse_summarize(text: str, url: str, title: str) -> str:
             "content": f"Summarize this page (URL: {url}, Title: {title}):\n\n{text[:3000]}",
         },
     ]
-    return default_adapter.complete(messages, schema={}, model=_llm_model())
+    return _llm.complete(messages, schema={}, model=_llm_model())

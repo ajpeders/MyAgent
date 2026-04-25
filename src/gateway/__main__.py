@@ -3,7 +3,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import ALLOWED_ORIGINS
-from gateway.routes import auth, memory, search, mail, chat
+from src.gateway.routes import auth, memory, search, mail, chat
+from src.services.llm.routes import router as llm_router
 
 
 app = FastAPI()
@@ -21,6 +22,7 @@ app.include_router(memory.router)
 app.include_router(search.router)
 app.include_router(mail.router)
 app.include_router(chat.router)
+app.include_router(llm_router)
 
 
 @app.get("/health")

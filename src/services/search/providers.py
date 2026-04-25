@@ -1,7 +1,7 @@
 """Search providers — DuckDuckGo, Searx, Google. Extracted from core/search.py."""
 from dataclasses import dataclass
 
-from core.config import SEARCH_PROVIDER, SEARCH_SEARX_URL, GOOGLE_API_KEY, GOOGLE_SEARCH_CX
+from src.core.config import SEARCH_PROVIDER, SEARCH_SEARX_URL, GOOGLE_API_KEY, GOOGLE_SEARCH_CX
 
 
 @dataclass

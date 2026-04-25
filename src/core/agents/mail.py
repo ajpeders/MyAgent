@@ -1,7 +1,7 @@
 from .base import AgentDef
-from core.actions.mail import fetch_mailboxes
-from core.memory import load_memory
-from core.tools import MAIL_TOOLS, build_system_prompt
+from src.core.actions.mail import fetch_mailboxes
+from src.core.memory import load_memory
+from src.core.tools import MAIL_TOOLS, build_system_prompt
 
 
 class MailAgent(AgentDef):

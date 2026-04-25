@@ -5,7 +5,7 @@ import uuid
 import struct
 from pathlib import Path
 
-from core.db import _connect
+from src.core.db import _connect
 
 
 class MemoryService:

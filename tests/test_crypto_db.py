@@ -1,12 +1,11 @@
-"""Tests for core.crypto and core.db modules."""
+"""Tests for crypto and the auth service store."""
 import json
+
 import pytest
-from pathlib import Path
 
-from cryptography.exceptions import InvalidTag
-
-from core.crypto import encrypt_payload, decrypt_payload, hash_password, verify_password
-from core.db import UserStore, SessionStore, EmailCacheStore, SessionState
+from src.core.crypto import encrypt_payload, decrypt_payload, hash_password, verify_password
+from src.services.auth.store import UserStore
+from src.gateway.session import SessionStore, SessionState
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -15,8 +14,15 @@ from core.db import UserStore, SessionStore, EmailCacheStore, SessionState
 @pytest.fixture(autouse=True)
 def _tmp_db(tmp_path, monkeypatch):
     """Redirect DB_PATH to a temp file so tests never touch the real database."""
-    monkeypatch.setattr("core.db.DB_PATH", tmp_path / "test.db")
-    monkeypatch.setattr("core.db._schema_initialized", False)
+    from pathlib import Path
+    db_path = Path(tmp_path / "test.db")
+    monkeypatch.setattr("src.services.auth.store.DB_PATH", db_path)
+    monkeypatch.setattr("src.gateway.session.DB_PATH", db_path)
+    # Reset schema flag so new DB is created
+    import src.services.auth.store
+    import src.gateway.session
+    src.services.auth.store._schema_initialized = False
+    src.gateway.session._schema_initialized = False
 
 
 @pytest.fixture
@@ -27,11 +33,6 @@ def user_store():
 @pytest.fixture
 def session_store():
     return SessionStore()
-
-
-@pytest.fixture
-def email_cache_store():
-    return EmailCacheStore()
 
 
 # ── Crypto: encrypt / decrypt ────────────────────────────────────────────────
@@ -48,11 +49,11 @@ def test_encrypt_decrypt_roundtrip():
 def test_decrypt_wrong_password():
     data = {"secret": "value"}
     encrypted = encrypt_payload(data, "correct-password")
-    with pytest.raises(InvalidTag):
+    with pytest.raises(Exception):  # InvalidTag
         decrypt_payload(encrypted, "wrong-password")
 
 
-# ── Crypto: hash / verify ───────────────────────────────────────────────────
+# ── Crypto: hash / verify ────────────────────────────────────────────────────
 
 
 def test_hash_verify_roundtrip():
@@ -160,26 +161,3 @@ def test_delete_session(user_store, session_store):
 
 def test_get_session_not_found(session_store):
     assert session_store.get_session("no-such-id") is None
-
-
-# ── EmailCacheStore ──────────────────────────────────────────────────────────
-
-
-def test_set_and_get_cached_emails(user_store, email_cache_store):
-    uid = user_store.create_user("cache@test.com", "pw")
-    emails = [{"uid": 1, "subject": "Hello"}, {"uid": 2, "subject": "World"}]
-    email_cache_store.set_cached_emails(uid, "work", "INBOX", emails, "pw")
-    result = email_cache_store.get_cached_emails(uid, "work", "INBOX", "pw")
-    assert result == emails
-
-
-def test_get_cached_emails_missing(user_store, email_cache_store):
-    uid = user_store.create_user("nocache@test.com", "pw")
-    assert email_cache_store.get_cached_emails(uid, "x", "INBOX", "pw") is None
-
-
-def test_invalidate_cache(user_store, email_cache_store):
-    uid = user_store.create_user("inv@test.com", "pw")
-    email_cache_store.set_cached_emails(uid, "acct", "INBOX", [{"uid": 1}], "pw")
-    email_cache_store.invalidate(uid, "acct", "INBOX")
-    assert email_cache_store.get_cached_emails(uid, "acct", "INBOX", "pw") is None

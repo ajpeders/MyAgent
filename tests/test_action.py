@@ -1,6 +1,6 @@
 import json
 
-from core.actions.action import Action, ActionType
+from src.core.actions.action import Action, ActionType
 
 
 class TestActionIndex:

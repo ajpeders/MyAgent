@@ -1,16 +1,18 @@
 """Mail routes — /api/mail/*."""
-from fastapi import APIRouter, HTTPException
+from datetime import date as date_type, timedelta
+
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from gateway.middleware import get_session_id, get_user_id
-from gateway.session import load_session, save_session
-from services.mail.service import (
+from src.gateway.middleware import get_session_id, get_user_id
+from src.gateway.session import load_session, save_session
+from src.services.mail.service import (
     EmailNotFoundError,
     ImapConnectionError,
     MailService,
     NoActiveSessionError,
 )
-from core.config import IMAP_ACCOUNTS
+from src.core.config import IMAP_ACCOUNTS
 
 
 router = APIRouter()
@@ -27,9 +29,7 @@ class MoveRequest(BaseModel):
     folder: str = "Trash"
 
 
-def _require_session(request):
-    from fastapi import Request
-
+def _require_session(request: Request):
     session_id = get_session_id(request)
     user_id = get_user_id(request)
     if not session_id:
@@ -40,7 +40,7 @@ def _require_session(request):
 
 
 @router.get("/api/mail")
-def mail_get(request, page: int = 0):
+def mail_get(request: Request, page: int = 0):
     session_id, state = _require_session(request)
     if not state.mail_engine:
         raise HTTPException(status_code=404, detail="No active mail session")
@@ -60,7 +60,7 @@ def mail_get(request, page: int = 0):
 
 
 @router.post("/api/mail/fetch")
-def mail_fetch(request, body: FetchRequest):
+def mail_fetch(request: Request, body: FetchRequest):
     session_id, state = _require_session(request)
     if not state.imap_accounts and not IMAP_ACCOUNTS:
         raise HTTPException(status_code=400, detail="No IMAP accounts configured")
@@ -78,7 +78,7 @@ def mail_fetch(request, body: FetchRequest):
 
 
 @router.post("/api/mail/move")
-def mail_move(request, body: MoveRequest):
+def mail_move(request: Request, body: MoveRequest):
     session_id, state = _require_session(request)
     service = MailService(state)
     message = service.move(body.indices, body.folder)
@@ -87,8 +87,49 @@ def mail_move(request, body: MoveRequest):
     return {"message": message, "folder": body.folder}
 
 
+@router.get("/api/mail/by-date")
+def mail_by_date(
+    request: Request,
+    date: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    account: str = "",
+):
+    """Fetch emails by date or date range.
+
+    Single date:  ?date=2026-04-25
+    Date range:   ?start=2026-04-01&end=2026-04-30
+    """
+    session_id, state = _require_session(request)
+
+    if date:
+        since = date
+        # IMAP BEFORE is exclusive, so add 1 day
+        before = str(date_type.fromisoformat(date) + timedelta(days=1))
+    elif start and end:
+        since = start
+        before = str(date_type.fromisoformat(end) + timedelta(days=1))
+    else:
+        raise HTTPException(status_code=400, detail="Provide ?date= or ?start= and ?end=")
+
+    try:
+        from src.core.actions.mail_imap import fetch_by_date
+        emails = fetch_by_date(
+            since=since,
+            before=before,
+            account_name=account,
+            imap_accounts=state.imap_accounts,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"IMAP error: {e}")
+
+    return {"messages": emails}
+
+
 @router.get("/api/mail/{index}")
-def mail_read(request, index: int):
+def mail_read(request: Request, index: int):
     session_id, state = _require_session(request)
     service = MailService(state)
     email = service.read(index)

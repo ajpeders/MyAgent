@@ -1,8 +1,8 @@
 """Head agent: stateless router that classifies intent and picks a subagent."""
-from core.actions.action import AgentRoute
-from core.llm import default_adapter
-from core.memory import load_memory
-from core.tools import build_system_prompt, ToolDef, ParamDef
+from src.core.actions.action import AgentRoute
+from src.services.llm.adapters import default_adapter
+from src.core.memory import load_memory
+from src.core.tools import build_system_prompt, ToolDef, ParamDef
 
 # The head agent's only tool is "route" — modelled as a ToolDef for consistency.
 _ROUTE_TOOL = ToolDef(
@@ -31,7 +31,7 @@ class HeadAgent:
             memory=load_memory(),
             context=_AGENT_CONTEXT,
         )
-        content = default_adapter.complete(
+        content = default_adapter.complete_sync(
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user",   "content": user_input},

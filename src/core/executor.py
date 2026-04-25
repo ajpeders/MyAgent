@@ -1,281 +1,277 @@
-"""Agent dispatch — routes prompts to subagents and executes their plans.
+"""Agent executor — async LLM loop with tool execution.
 
-Session state is minimal: only the mail inbox (MailEngine) persists across
-turns. Routing, model selection, and conversation context are all per-request.
+Flow:
+  User prompt → LLM → tool_calls → execute → results → LLM → content
 """
-import typer
-from collections.abc import Callable
+import asyncio
+import json
+from dataclasses import dataclass
+from typing import Any
 
-from core.actions.action import ActionType, Action, Plan
-from core.actions.mail import refresh_mail, read_emails
-from core.agents import AGENTS
-from core.agents.head import HeadAgent
-from core.config import IMAP_ACCOUNTS, MAIL_SUMMARY_COUNT, TARGET_MAILBOX
-from core.docker import run_in_docker
-from core.mail_engine import MailEngine
-from core.llm import default_adapter
-from core.memory import remember
-from core.session_store import SessionState
+from src.services.llm.models import ToolCall, ToolResult, Plan
+from src.services.llm.service import LLMService
 
 
-# -- Stateless CLI helpers -------------------------------------------------
+# ── Tool context ─────────────────────────────────────────────────────────────
 
-def print_thinking(scope: str = "agent"):
-    print(f"[thinking] {scope}...", flush=True)
+@dataclass
+class ToolContext:
+    """Session-scoped context passed to every tool function."""
+    session_id: str = "_stateless"
+    user_id: str = ""
+    mail_engine: dict | None = None
+    imap_accounts: list[dict] | None = None
 
 
-def fetch_inbox(action: Action) -> tuple[list[dict], str]:
-    """Legacy helper for direct CLI use."""
-    print("[mail] getting mail...", flush=True)
-    refresh_mail()
-    inbox = read_emails(
-        action.count or MAIL_SUMMARY_COUNT,
-        action.unread_only,
-        mailbox=TARGET_MAILBOX,
-        account_name=action.account,
+# ── Result formatting ────────────────────────────────────────────────────────
+
+def _fmt_email_list(result: dict) -> str:
+    emails = result.get("emails", [])
+    if not emails:
+        return "(no emails)"
+    lines = []
+    for i, e in enumerate(emails[:20], 1):
+        lines.append(f"{i}. {e.get('from', '')} | {e.get('subject', '')}")
+    total = result.get("total_emails", 0)
+    if total > 20:
+        lines.append(f"... and {total - 20} more")
+    return "\n".join(lines)
+
+
+# ── Tool implementations ─────────────────────────────────────────────────────
+
+async def _tool_mail_read(params: dict, ctx: ToolContext) -> str:
+    from src.core.mail_engine import MailEngine
+    from src.core.config import MAIL_SUMMARY_COUNT
+
+    engine = (
+        MailEngine.from_dict(ctx.mail_engine, imap_accounts=ctx.imap_accounts)
+        if ctx.mail_engine
+        else MailEngine(model="", imap_accounts=ctx.imap_accounts)
     )
-    label = "unread" if action.unread_only else "all"
-    return inbox, label
+    engine.fetch(
+        count=params.get("count", MAIL_SUMMARY_COUNT),
+        unread_only=params.get("unread_only", False),
+        account=params.get("account", ""),
+    )
+    ctx.mail_engine = engine.to_dict()
+    return _fmt_email_list(engine._mail_list_result())
 
 
-def mail_loop(action: Action, model: str, mail_system: str | Callable[[], str] | None = None):
-    """Compatibility wrapper around MailEngine for stateless CLI mode (config-based IMAP only)."""
-    engine = MailEngine(model=model)  # uses IMAP_ACCOUNTS from config
-    engine.fetch(count=action.count, unread_only=action.unread_only, account=action.account)
-    print(engine.display(), flush=True)
+async def _tool_mail_move(params: dict, ctx: ToolContext) -> str:
+    from src.core.mail_engine import MailEngine
+    from src.core.actions.action import Action, ActionType
 
-    while True:
-        user_input = typer.prompt("\n> ")
-        if user_input.lower() in ("done", "exit", "quit"):
-            print("[done] mail session ended.", flush=True)
-            return
-
-        results = engine.handle(user_input, interactive=True)
-        for result in results:
-            if result["type"] == "confirm":
-                if typer.confirm(result["content"]):
-                    pending = Action(**result["pending"])
-                    print(engine.execute(pending), flush=True)
-                    print(engine.display(), flush=True)
-                else:
-                    print("[mail] skipped.", flush=True)
-            else:
-                print(result.get("content", ""), flush=True)
-
-        if any(result["type"] == "done" for result in results):
-            return
+    if not ctx.mail_engine:
+        return "Error: no active mail session. Call mail_read first."
+    engine = MailEngine.from_dict(ctx.mail_engine, imap_accounts=ctx.imap_accounts)
+    action = Action(
+        type=ActionType.mail_move,
+        indices=params.get("indices", []),
+        folder=params.get("folder", "Trash"),
+    )
+    msg = engine.execute(action)
+    ctx.mail_engine = engine.to_dict()
+    return msg
 
 
-def execute(
-    messages: list[dict],
-    model: str,
-    mail_system: str | Callable[[], str] | None = None,
-):
-    """Legacy one-shot entry point."""
-    print_thinking("agent")
-    content = default_adapter.complete(messages, Action.model_json_schema(), model)
-    action = Action.model_validate_json(content)
+async def _tool_web_search(params: dict, ctx: ToolContext) -> str:
+    from src.core.search import search_web
 
-    if action.type == ActionType.done:
-        print("[done] session ended.", flush=True)
-    elif action.type == ActionType.misc:
-        print(f"[misc] {action.content}", flush=True)
-    elif action.type == ActionType.answer:
-        print(f"[answer] {action.content}", flush=True)
-    elif action.type == ActionType.summary:
-        print(f"[summary] {action.content}", flush=True)
-    elif action.type == ActionType.warning:
-        print(f"[warning] {action.content}", flush=True)
-    elif action.type == ActionType.note:
-        remember(f"[note] {action.content}")
-        print(f"[note] saved: {action.content}", flush=True)
-    elif action.type == ActionType.remember:
-        remember(action.content)
-        print(f"[memory] saved: {action.content}", flush=True)
-    elif action.type == ActionType.command:
-        typer.confirm(f"Run in sandbox: {action.content!r}?", abort=True)
-        output = run_in_docker(action.content)
-        print(f"[output] {output}", flush=True)
-    elif action.type == ActionType.mail_read:
-        mail_loop(action, model, mail_system)
-    elif action.type == ActionType.ask_user:
-        print(f"[?] {action.content}", flush=True)
+    result = search_web(params.get("content", ""))
+    answer = result.get("answer", "")
+    if result.get("results"):
+        answer += "\n\nResults:\n" + "\n".join(
+            f"- {r['title']}: {r['url']}" for r in result["results"][:5]
+        )
+    return answer
 
 
-# -- Session dispatch -------------------------------------------------------
+async def _tool_remember(params: dict, ctx: ToolContext) -> str:
+    from src.core.memory import remember
 
-_head_agent = HeadAgent()
+    remember(params.get("content", ""), ctx.user_id)
+    return f"Saved: {params.get('content', '')}"
 
 
-def _resolve_pending(state: SessionState) -> list[dict]:
-    """Execute a previously confirmed pending action."""
-    pending = state.pending
-    state.pending = None
+async def _tool_note(params: dict, ctx: ToolContext) -> str:
+    from src.core.memory import note as mem_note
 
-    action = Action(**pending)
+    mem_note(f"[note] {params.get('content', '')}")
+    return f"Note saved: {params.get('content', '')}"
 
-    if action.type == ActionType.mail_move and state.mail_engine:
-        engine = MailEngine.from_dict(state.mail_engine, imap_accounts=state.imap_accounts)
-        msg = engine.execute(action)
-        state.mail_engine = engine.to_dict()
-        result = engine._mail_list_result(msg)
-        return [result]
 
-    if action.type == ActionType.command:
-        output = run_in_docker(action.content)
-        return [{"type": "output", "content": output, "agent": "command"}]
+async def _tool_personal_data(params: dict, ctx: ToolContext) -> str:
+    from src.core.memory import recall
 
-    return [{"type": "warning", "content": "Nothing to confirm.", "agent": "system"}]
+    results = recall(params.get("content", ""), ctx.user_id, top_k=5)
+    if not results:
+        return "I don't have any memories on that topic."
+    lines = [f"- {r['content']} (relevance: {round(r['score'] * 100)}%)" for r in results]
+    return "Here's what I remember:\n" + "\n".join(lines)
 
+
+async def _tool_command(params: dict, ctx: ToolContext) -> str:
+    from src.core.docker import run_in_docker
+
+    return run_in_docker(params.get("content", ""))
+
+
+async def _tool_answer(params: dict, ctx: ToolContext) -> str:
+    return params.get("content", "")
+
+
+async def _tool_done(params: dict, ctx: ToolContext) -> str:
+    return "[done]"
+
+
+TOOL_REGISTRY: dict[str, callable] = {
+    "mail_read":     _tool_mail_read,
+    "mail_move":     _tool_mail_move,
+    "web_search":    _tool_web_search,
+    "remember":      _tool_remember,
+    "note":          _tool_note,
+    "personal_data": _tool_personal_data,
+    "command":       _tool_command,
+    "answer":        _tool_answer,
+    "done":          _tool_done,
+}
+
+
+# ── Agent executor ───────────────────────────────────────────────────────────
+
+class AgentExecutor:
+    """Async executor: prompt → LLM → tools → results → repeat until content."""
+
+    def __init__(
+        self,
+        session_state: "SessionState | None" = None,
+        tools: list[dict] | None = None,
+        model: str = "qwen3:8b",
+    ):
+        from src.gateway.session import SessionState
+
+        state = session_state or SessionState(session_id="_stateless", user_id="")
+        self._ctx = ToolContext(
+            session_id=state.session_id,
+            user_id=state.user_id,
+            mail_engine=state.mail_engine,
+            imap_accounts=state.imap_accounts,
+        )
+        self._tools = tools or []
+        self._model = model
+        self._llm = LLMService()
+        self._session_state = state
+
+    def sync_run(self, prompt: str) -> str:
+        """Synchronous wrapper for backward compat."""
+        import asyncio
+        return asyncio.run(self.run(prompt))
+
+    async def run(self, prompt: str) -> str:
+        """Main agent loop."""
+        messages = [{"role": "user", "content": prompt}]
+
+        while True:
+            response = await self._llm.chat(messages, self._tools, self._model)
+
+            if response.get("content"):
+                return response["content"]
+
+            if response.get("tool_calls"):
+                plan = _parse_plan(response["tool_calls"])
+                results = await self._execute_plan(plan)
+                messages.extend(_tool_results_to_messages(results))
+                continue
+
+            return "No response from LLM."
+
+    async def _execute_plan(self, plan: Plan) -> list[ToolResult]:
+        """Execute plan steps sequentially, tools within each step concurrently."""
+        all_results = []
+        for step in plan.steps:
+            step_results = await asyncio.gather(
+                *[self._execute_tool(call) for call in step.calls]
+            )
+            all_results.extend(step_results)
+        return all_results
+
+    async def _execute_tool(self, call: ToolCall) -> ToolResult:
+        func = TOOL_REGISTRY.get(call.name)
+        if not func:
+            return ToolResult(id=call.id, success=False, error=f"Unknown tool: {call.name}")
+        try:
+            result = await func(call.params, self._ctx)
+            return ToolResult(id=call.id, success=True, content=str(result))
+        except Exception as e:
+            return ToolResult(id=call.id, success=False, error=str(e))
+
+
+def _parse_plan(tool_calls: Any) -> Plan:
+    """Parse LLM tool_calls response into a Plan."""
+    if isinstance(tool_calls, str):
+        data = json.loads(tool_calls)
+    elif isinstance(tool_calls, list):
+        data = {"steps": [{"calls": tool_calls}]}
+    elif isinstance(tool_calls, dict):
+        data = tool_calls
+    else:
+        raise ValueError(f"Unexpected tool_calls type: {type(tool_calls)}")
+    return Plan.model_validate(data)
+
+
+def _tool_results_to_messages(results: list[ToolResult]) -> list[dict]:
+    """Convert tool results to assistant+tool messages for LLM context."""
+    messages = []
+    for r in results:
+        messages.append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": r.id, "name": r.id, "params": {}}],
+        })
+        messages.append({
+            "role": "tool",
+            "tool_call_id": r.id,
+            "content": r.content if r.success else f"Error: {r.error}",
+        })
+    return messages
+
+
+# ── Backward-compat dispatch_session ─────────────────────────────────────────
 
 def dispatch_session(
-    state: SessionState,
+    state: "SessionState",
     prompt: str,
     model: str,
     *,
     interactive: bool = False,
     confirm: bool = False,
 ) -> list[dict]:
-    """Route a prompt and return structured results.
+    """Legacy sync entry point. Returns list of result dicts."""
+    from src.gateway.session import SessionState
+    from src.core.tools.registry import MAIL_TOOLS, ANSWER_TOOLS, COMMAND_TOOLS
 
-    Mail state persists in the session. All other routing and context is
-    stateless — resolved fresh on each request.
-    """
-    # Resolve pending confirmation
-    if confirm and state.pending:
-        return _resolve_pending(state)
+    state = SessionState(
+        session_id=state.session_id,
+        user_id=state.user_id,
+        mail_engine=state.mail_engine,
+        imap_accounts=state.imap_accounts,
+        pending=state.pending,
+    )
 
-    # Clear stale pending if not confirming
-    if state.pending and not confirm:
-        state.pending = None
-
-    # If a mail session is active, delegate directly to the engine
-    if state.mail_engine:
-        engine = MailEngine.from_dict(state.mail_engine, imap_accounts=state.imap_accounts)
-        results = engine.handle(prompt, interactive=interactive)
-        state.mail_engine = engine.to_dict()
-
-        if any(r["type"] == "done" for r in results):
-            state.mail_engine = None
-
-        # Store pending action for non-interactive confirm flow
-        for r in results:
-            if r.get("pending"):
-                state.pending = r["pending"]
-
-        return results
-
-    # Handle note/remember at session level (user-scoped) — intercept before routing
-    # These are handled directly here so they have access to state.user_id
-    lower_prompt = prompt.lower().strip()
-    if lower_prompt.startswith("note ") or lower_prompt.startswith("remember "):
-        from core.memory import note as mem_note, remember as mem_remember
-
-        if lower_prompt.startswith("note "):
-            content = prompt[5:].strip()
-            mem_note(f"[note] {content}")
-            return [{"type": "note", "content": f"Note saved: {content}", "agent": "memory"}]
-        else:  # remember
-            content = prompt[9:].strip()
-            mem_remember(content, state.user_id)
-            return [{"type": "remember", "content": f"Remembered: {content}", "agent": "memory"}]
-
-    # Fresh routing
-    route = _head_agent.route(prompt, model)
+    # Route to pick the right tool set
+    from src.core.agents.head import HeadAgent
+    head = HeadAgent()
+    route = head.route(prompt, model)
     agent_name = route.agent
 
-    if agent_name == "mail":
-        # Initial mail fetch — create engine and populate inbox
-        engine = MailEngine(model=model, imap_accounts=state.imap_accounts)
-        engine.fetch()
-        state.mail_engine = engine.to_dict()
-        return [engine._mail_list_result(f"Fetched {len(engine.inbox)} emails")]
+    tool_map = {
+        "mail":    [t.to_dict() for t in MAIL_TOOLS],
+        "answer":  [t.to_dict() for t in ANSWER_TOOLS],
+        "command": [t.to_dict() for t in COMMAND_TOOLS],
+    }
+    tools = tool_map.get(agent_name, [])
 
-    # Stateless single-turn agents (answer, command, etc.)
-    agent = AGENTS[agent_name]
-    context = [
-        {"role": "system", "content": agent.system_prompt()},
-        {"role": "user", "content": prompt},
-    ]
-    plan = agent.plan(context, model)
-    return _dispatch_plan(plan, agent_name, model, interactive=interactive)
-
-
-def _dispatch_plan(
-    plan: Plan,
-    agent_name: str,
-    model: str,
-    *,
-    interactive: bool = False,
-) -> list[dict]:
-    """Execute a plan from a stateless agent."""
-    results: list[dict] = []
-
-    for action in plan.actions:
-        if action.type == ActionType.done:
-            results.append({"type": "done", "content": "Session ended.", "agent": agent_name})
-            break
-
-        elif action.type in (ActionType.answer, ActionType.summary, ActionType.warning):
-            results.append({"type": action.type.value, "content": action.content, "agent": agent_name})
-
-        elif action.type == ActionType.note:
-            from core.memory import note as mem_note
-
-            mem_note(f"[note] {action.content}", agent=agent_name)
-            results.append({"type": "note", "content": action.content, "agent": agent_name})
-
-        elif action.type == ActionType.remember:
-            # Agent emitted remember — store in agent-scope notes (disk-based)
-            from core.memory import note as mem_note
-
-            mem_note(action.content, agent=agent_name)
-            results.append({"type": "remember", "content": action.content, "agent": agent_name})
-
-        elif action.type == ActionType.ask_user:
-            results.append({"type": "ask_user", "content": action.content, "agent": agent_name})
-            break
-
-        elif action.type == ActionType.command:
-            if interactive:
-                typer.confirm(f"Run in sandbox: {action.content!r}?", abort=True)
-                output = run_in_docker(action.content)
-                results.append({"type": "output", "content": output, "agent": agent_name})
-            else:
-                results.append({
-                    "type": "confirm",
-                    "content": action.content,
-                    "agent": agent_name,
-                    "pending_confirm": action.content,
-                })
-                break
-
-        elif action.type == ActionType.web_search:
-            from core.search import search_web
-
-            try:
-                result = search_web(action.content)
-                answer_text = result["answer"]
-                if result["results"]:
-                    answer_text += "\n\n**Web Results:**\n" + "\n".join(
-                        f"- [{r['title']}]({r['url']})" for r in result["results"][:5]
-                    )
-            except TimeoutError:
-                answer_text = "Search timed out. Please try again."
-            except Exception as e:
-                answer_text = f"Search failed: {e}"
-
-            results.append({"type": "answer", "content": answer_text, "agent": agent_name})
-
-        elif action.type == ActionType.personal_data:
-            from core.memory import recall
-
-            memories = recall(action.content, state.user_id, top_k=5)
-            if not memories:
-                answer_text = "I don't have any memories on that topic. Try remembering something first."
-            else:
-                lines = [f"- {m['content']} (relevance: {round(m['score'] * 100)}%)" for m in memories]
-                answer_text = "Here's what I remember:\n" + "\n".join(lines)
-            results.append({"type": "answer", "content": answer_text, "agent": agent_name})
-
-    return results
+    executor = AgentExecutor(session_state=state, tools=tools, model=model)
+    content = executor.sync_run(prompt)
+    return [{"type": "answer", "content": content, "agent": agent_name}]

@@ -6,7 +6,7 @@ from html.parser import HTMLParser
 
 from imapclient import IMAPClient
 
-from core.config import IMAP_ACCOUNTS
+from src.core.config import IMAP_ACCOUNTS
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -406,6 +406,98 @@ def move_emails(
         client.add_flags(uids, [b"\\Deleted"])
         client.expunge(uids)
         return len(uids)
+    finally:
+        client.logout()
+
+
+def fetch_by_date(
+    since: str,
+    before: str,
+    mailbox: str = "INBOX",
+    account_name: str = "",
+    imap_accounts: list[dict] | None = None,
+) -> list[dict]:
+    """Fetch emails within a date range (inclusive).
+
+    since/before are date strings in YYYY-MM-DD format.
+    IMAP SINCE is inclusive, BEFORE is exclusive — caller should add 1 day to `before`.
+    """
+    from datetime import datetime
+
+    since_dt = datetime.strptime(since, "%Y-%m-%d")
+    before_dt = datetime.strptime(before, "%Y-%m-%d")
+    # IMAP date format: DD-Mon-YYYY
+    since_imap = since_dt.strftime("%d-%b-%Y")
+    before_imap = before_dt.strftime("%d-%b-%Y")
+
+    sources = imap_accounts if imap_accounts is not None else IMAP_ACCOUNTS
+    if account_name or len(sources) == 1:
+        acct = _get_account(account_name, imap_accounts)
+        return _fetch_by_date_from_account(acct, since_imap, before_imap, mailbox)
+
+    all_emails = []
+    for acct in sources:
+        try:
+            all_emails.extend(_fetch_by_date_from_account(acct, since_imap, before_imap, mailbox))
+        except Exception as e:
+            print(f"[mail] warning: could not fetch from {acct.get('name', '?')}: {e}", flush=True)
+    return all_emails
+
+
+def _fetch_by_date_from_account(
+    acct: dict, since_imap: str, before_imap: str, mailbox: str
+) -> list[dict]:
+    """Fetch emails from one account within an IMAP date range."""
+    client = _connect(acct)
+    try:
+        client.select_folder(mailbox, readonly=True)
+        criteria = ["SINCE", since_imap, "BEFORE", before_imap]
+        uids = client.search(criteria)
+
+        if not uids:
+            return []
+
+        raw_messages = client.fetch(uids, ["ENVELOPE", "FLAGS", "RFC822"])
+        emails_out = []
+        for uid in uids:
+            data = raw_messages.get(uid, {})
+            envelope = data.get(b"ENVELOPE")
+            flags = data.get(b"FLAGS", ())
+            raw_body = data.get(b"RFC822", b"")
+            is_read = b"\\Seen" in flags
+
+            if envelope:
+                subject = _decode_header(
+                    envelope.subject.decode("utf-8", errors="replace")
+                    if isinstance(envelope.subject, bytes)
+                    else (envelope.subject or "")
+                )
+                from_addr = ""
+                if envelope.from_:
+                    addr = envelope.from_[0]
+                    name = (addr.name.decode("utf-8", errors="replace")
+                            if isinstance(addr.name, bytes) else (addr.name or ""))
+                    mailbox_part = (addr.mailbox.decode("utf-8", errors="replace")
+                                    if isinstance(addr.mailbox, bytes) else (addr.mailbox or ""))
+                    host_part = (addr.host.decode("utf-8", errors="replace")
+                                 if isinstance(addr.host, bytes) else (addr.host or ""))
+                    from_addr = f"{name} <{mailbox_part}@{host_part}>" if name else f"{mailbox_part}@{host_part}"
+                date_str = str(envelope.date) if envelope.date else ""
+            else:
+                msg = email.message_from_bytes(raw_body or b"")
+                subject = _decode_header(msg.get("Subject", ""))
+                from_addr = msg.get("From", "")
+                date_str = msg.get("Date", "")
+
+            emails_out.append({
+                "id": uid,
+                "subject": subject,
+                "from": from_addr,
+                "date": date_str,
+                "read": is_read,
+                "account": acct["name"],
+            })
+        return emails_out
     finally:
         client.logout()
 

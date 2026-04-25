@@ -2,15 +2,15 @@
 import json
 import re
 
-from core.actions.action import Action, ActionType, Plan
-from core.actions.mail import (
+from src.core.actions.action import Action, ActionType, Plan
+from src.core.actions.mail import (
     read_emails as mail_read_emails,
     move_by_uids as mail_move_by_uids,
     refresh_mail as mail_refresh,
     email_matches as mail_email_matches,
 )
-from core.config import MAIL_SUMMARY_COUNT, TARGET_MAILBOX
-from core.llm import default_adapter
+from src.core.config import MAIL_SUMMARY_COUNT, TARGET_MAILBOX
+from src.services.llm.adapters import default_adapter
 
 
 class MailEngine:
@@ -227,7 +227,7 @@ class MailEngine:
                 {"role": "system", "content": self._RECOMMEND_SYSTEM},
                 {"role": "user", "content": f"Emails:\n{self._emails_for_llm(target)}"},
             ]
-            raw = default_adapter.complete(messages, self._RECOMMEND_SCHEMA, self.model)
+            raw = default_adapter.complete_sync(messages, self._RECOMMEND_SCHEMA, self.model)
             data = json.loads(raw)
             recommendations = {
                 rec["index"]: rec["action"]
@@ -242,8 +242,8 @@ class MailEngine:
 
     def parse_intent(self, user_input: str) -> Plan:
         """Parse a user mail command into executable actions."""
-        from core.tools import MAIL_TOOLS
-        from core.tools.schema import build_plan_schema
+        from src.core.tools import MAIL_TOOLS
+        from src.core.tools.schema import build_plan_schema
 
         messages = [
             {"role": "system", "content": self._INTENT_SYSTEM},
@@ -256,7 +256,7 @@ class MailEngine:
             },
         ]
         try:
-            raw = default_adapter.complete(messages, build_plan_schema(MAIL_TOOLS), self.model)
+            raw = default_adapter.complete_sync(messages, build_plan_schema(MAIL_TOOLS), self.model)
             if not raw or not raw.strip():
                 return Plan(actions=[Action(type=ActionType.done)])
             return Plan.model_validate_json(raw)
@@ -299,14 +299,14 @@ class MailEngine:
             return f"[mail] Fetched {len(self.inbox)} {label} emails"
 
         if action.type == ActionType.mail_read_all:
-            from core.actions.mail import read_all_emails
+            from src.core.actions.mail import read_all_emails
             self.inbox = read_all_emails(mailbox=action.mailbox, account_name=action.account, imap_accounts=self.imap_accounts)
             self.page = 0
             self.recommend()
             return f"[mail] Synced {len(self.inbox)} emails from {action.mailbox}"
 
         if action.type == ActionType.mail_create_folder:
-            from core.actions.mail import create_folder
+            from src.core.actions.mail import create_folder
             success = create_folder(folder_name=action.folder_name, account_name=action.account, imap_accounts=self.imap_accounts)
             return f"[mail] Folder '{action.folder_name}' created." if success else f"[mail] Failed to create folder '{action.folder_name}'."
 

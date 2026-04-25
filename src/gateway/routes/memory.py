@@ -2,8 +2,8 @@
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
-from gateway.middleware import get_user_id
-from services.memory.service import remember, recall, list_memories, forget
+from src.gateway.middleware import get_user_id
+from src.services.memory.service import remember, recall, list_memories, forget
 
 
 router = APIRouter()

@@ -5,10 +5,9 @@ import uuid
 
 import sqlite3
 
-from core.crypto import hash_password, verify_password
-
-DB_PATH = sqlite3.connect(":memory:").execute("SELECT :memory:").fetchone()  # keep import happy, overridden below
+from src.core.crypto import hash_password, verify_password
 from pathlib import Path
+
 DB_PATH = Path(__file__).parent.parent.parent / "data.db"
 
 _schema_initialized = False
@@ -33,16 +32,25 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             email                TEXT UNIQUE NOT NULL,
             password_hash        TEXT,
             encrypted_imap_creds BLOB,
+            is_admin             INTEGER NOT NULL DEFAULT 0,
             created_at           REAL NOT NULL,
             updated_at           REAL NOT NULL
         )
     """)
+    # Migration for existing DBs
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             session_id    TEXT PRIMARY KEY,
             user_id       TEXT NOT NULL,
             mail_engine   TEXT,
             imap_accounts TEXT,
+            enc_key       TEXT,
+            password_hash TEXT,
             pending       TEXT,
             created_at    REAL NOT NULL,
             updated_at    REAL NOT NULL,
@@ -76,7 +84,7 @@ class UserStore:
     def get_user_by_email(self, email: str) -> dict | None:
         conn = _connect()
         row = conn.execute(
-            "SELECT user_id, email, password_hash, encrypted_imap_creds FROM users WHERE email = ?",
+            "SELECT user_id, email, password_hash, encrypted_imap_creds, is_admin FROM users WHERE email = ?",
             (email.lower(),),
         ).fetchone()
         conn.close()
@@ -87,12 +95,13 @@ class UserStore:
             "email": row[1],
             "password_hash": row[2],
             "encrypted_imap_creds": row[3],
+            "is_admin": bool(row[4]),
         }
 
     def get_user_by_id(self, user_id: str) -> dict | None:
         conn = _connect()
         row = conn.execute(
-            "SELECT user_id, email, password_hash, encrypted_imap_creds FROM users WHERE user_id = ?",
+            "SELECT user_id, email, password_hash, encrypted_imap_creds, is_admin FROM users WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         conn.close()
@@ -103,7 +112,18 @@ class UserStore:
             "email": row[1],
             "password_hash": row[2],
             "encrypted_imap_creds": row[3],
+            "is_admin": bool(row[4]),
         }
+
+    def set_admin(self, user_id: str, is_admin: bool) -> None:
+        import time as _time
+        conn = _connect()
+        conn.execute(
+            "UPDATE users SET is_admin = ?, updated_at = ? WHERE user_id = ?",
+            (int(is_admin), _time.time(), user_id),
+        )
+        conn.commit()
+        conn.close()
 
     def update_imap_creds(self, user_id: str, encrypted_creds: list) -> None:
         now = time.time()

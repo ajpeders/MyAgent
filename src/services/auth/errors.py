@@ -1,5 +1,5 @@
 """Auth service errors."""
-from services.errors import ServiceError
+from src.services.errors import ServiceError
 
 
 class AuthServiceError(ServiceError):

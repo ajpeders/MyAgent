@@ -6,9 +6,9 @@ with embeddings generated using nomic-embed-text via Ollama.
 import json as json_lib
 from pathlib import Path
 
-from core.db import MemoryStore
+from src.services.memory.service import MemoryService
 
-_store = MemoryStore()
+_store = MemoryService()
 
 # ── Legacy flat-file notes (agent-scoped, no user_id) ─────────────────────────
 
@@ -35,7 +35,7 @@ def load_memory(agent: str = "shared") -> list[str]:
 
 def remember(fact: str, user_id: str) -> str:
     """Store a fact in the user's semantic memory. Returns memory_id."""
-    return _store.add_memory(user_id, fact)
+    return _store.remember(fact, user_id)
 
 
 # ── Agent-scope notes (legacy, no user_id) ───────────────────────────────────
@@ -55,7 +55,7 @@ def note(fact: str, agent: str = "shared") -> None:
 
 def recall(query: str, user_id: str, top_k: int = 5) -> list[dict]:
     """Semantic search over user memories. Returns top-k matches with scores."""
-    return _store.search(user_id, query, top_k=top_k)
+    return _store.recall(query, user_id, top_k=top_k)
 
 
 def list_memories(user_id: str) -> list[dict]:
@@ -65,19 +65,4 @@ def list_memories(user_id: str) -> list[dict]:
 
 def forget(memory_id: str, user_id: str) -> bool:
     """Delete a specific memory. Returns True if deleted."""
-    return _store.delete_memory(memory_id, user_id)
-
-
-def recall(query: str, user_id: str, top_k: int = 5) -> list[dict]:
-    """Semantic search over user memories. Returns top-k matches with scores."""
-    return _store.search(user_id, query, top_k=top_k)
-
-
-def list_memories(user_id: str) -> list[dict]:
-    """List all memories for a user, newest first."""
-    return _store.list_memories(user_id)
-
-
-def forget(memory_id: str, user_id: str) -> bool:
-    """Delete a specific memory. Returns True if deleted."""
-    return _store.delete_memory(memory_id, user_id)
+    return _store.forget(memory_id, user_id)

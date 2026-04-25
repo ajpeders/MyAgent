@@ -1,6 +1,6 @@
 from .base import AgentDef
-from core.memory import load_memory
-from core.tools import ANSWER_TOOLS, build_system_prompt
+from src.core.memory import load_memory
+from src.core.tools import ANSWER_TOOLS, build_system_prompt
 
 
 class AnswerAgent(AgentDef):

@@ -3,13 +3,14 @@
 IMAP is used when IMAP_ACCOUNTS is configured in .env.
 AppleScript is the fallback for macOS with Mail.app.
 """
-from core.config import IMAP_ACCOUNTS
+from src.core.config import IMAP_ACCOUNTS
 
 if IMAP_ACCOUNTS:
     from .mail_imap import (
         fetch_mailboxes,
         read_emails,
         read_all_emails,
+        fetch_by_date,
         create_folder,
         move_emails,
         move_by_uids,

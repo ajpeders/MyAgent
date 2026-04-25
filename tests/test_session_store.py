@@ -1,4 +1,4 @@
-from core.session_store import SessionState
+from src.gateway.session import SessionState
 
 
 def test_session_state_defaults():

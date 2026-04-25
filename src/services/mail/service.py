@@ -1,8 +1,8 @@
 """Mail service — IMAP fetch, email display, move/delete. Owns email_cache table."""
 from dataclasses import dataclass
 
-from gateway.session import SessionState
-from services.mail.errors import (
+from src.gateway.session import SessionState
+from src.services.mail.errors import (
     EmailNotFoundError,
     FolderResolutionError,
     ImapConnectionError,

@@ -1,8 +1,8 @@
 import json
 from unittest.mock import patch
 
-from core.actions.action import Action, ActionType, Plan
-from core.mail_engine import MailEngine
+from src.core.actions.action import Action, ActionType, Plan
+from src.core.mail_engine import MailEngine
 
 
 FAKE_EMAILS = [
@@ -188,8 +188,8 @@ class TestRecommend:
             ]
         })
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = llm_response
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = llm_response
             engine.recommend()
 
         assert engine.inbox[0]["recommendation"] == "keep"
@@ -200,8 +200,8 @@ class TestRecommend:
         engine = MailEngine(model="test")
         engine.inbox = [email.copy() for email in FAKE_EMAILS]
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.side_effect = Exception("LLM down")
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.side_effect = Exception("LLM down")
             engine.recommend()
 
         for email in engine.inbox:
@@ -211,8 +211,8 @@ class TestRecommend:
         engine = MailEngine(model="test")
         engine.inbox = [email.copy() for email in FAKE_EMAILS]
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = "not json"
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = "not json"
             engine.recommend()
 
         for email in engine.inbox:
@@ -228,8 +228,8 @@ class TestParseIntent:
             Action(type=ActionType.mail_move, indices=[1, 3], folder="Trash")
         ]).model_dump_json()
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = plan_json
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = plan_json
             plan = engine.parse_intent("delete 1 and 3")
 
         assert len(plan.actions) == 1
@@ -240,8 +240,8 @@ class TestParseIntent:
         engine = MailEngine(model="test")
         engine.inbox = [email.copy() for email in FAKE_EMAILS]
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = "garbage"
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = "garbage"
             plan = engine.parse_intent("delete 1")
 
         assert len(plan.actions) == 1
@@ -253,10 +253,10 @@ class TestExecute:
         fake = [FAKE_EMAILS[0].copy()]
         engine = MailEngine(model="test")
 
-        with patch("core.mail_engine.mail_read_emails", return_value=fake), \
-             patch("core.mail_engine.mail_refresh"), \
-             patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = json.dumps({
+        with patch("src.core.mail_engine.mail_read_emails", return_value=fake), \
+             patch("src.core.mail_engine.mail_refresh"), \
+             patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = json.dumps({
                 "recommendations": [{"index": 1, "action": "keep"}]
             })
             engine.fetch()
@@ -271,7 +271,7 @@ class TestExecute:
 
         action = Action(type=ActionType.mail_move, indices=[1], folder="Trash")
 
-        with patch("core.mail_engine.mail_move_by_uids", return_value=1):
+        with patch("src.core.mail_engine.mail_move_by_uids", return_value=1):
             result = engine.execute(action)
 
         assert len(engine.inbox) == 2
@@ -304,8 +304,8 @@ class TestHandle:
             Action(type=ActionType.answer, indices=[1])
         ]).model_dump_json()
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = plan_json
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = plan_json
             results = engine.handle("read 1")
 
         assert len(results) >= 1
@@ -318,8 +318,8 @@ class TestHandle:
 
         plan_json = Plan(actions=[Action(type=ActionType.done)]).model_dump_json()
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = plan_json
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = plan_json
             results = engine.handle("done")
 
         assert any(result["type"] == "done" for result in results)
@@ -332,8 +332,8 @@ class TestHandle:
             Action(type=ActionType.mail_move, indices=[1], folder="Trash")
         ]).model_dump_json()
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = plan_json
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = plan_json
             results = engine.handle("delete 1")
 
         assert results[0]["type"] == "confirm"
@@ -347,8 +347,8 @@ class TestHandle:
             Action(type=ActionType.answer, indices=[1])
         ]).model_dump_json()
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = plan_json
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = plan_json
             results = engine.handle("read 1")
 
         assert "answer" in [result["type"] for result in results]
@@ -358,10 +358,10 @@ class TestHandle:
         engine = MailEngine(model="test", page_size=1)
         engine.inbox = [email.copy() for email in FAKE_EMAILS]
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
             results = engine.handle("next")
 
-        mock_llm.complete.assert_not_called()
+        mock_llm.complete_sync.assert_not_called()
         assert engine.page == 1
         assert results[0]["emails"][0]["subject"] == "Meeting"
 
@@ -397,10 +397,10 @@ class TestFullFlow:
         ]).model_dump_json()
         engine = MailEngine(model="test")
 
-        with patch("core.mail_engine.mail_read_emails", return_value=fake_emails), \
-             patch("core.mail_engine.mail_refresh"), \
-             patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = rec_response
+        with patch("src.core.mail_engine.mail_read_emails", return_value=fake_emails), \
+             patch("src.core.mail_engine.mail_refresh"), \
+             patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = rec_response
             engine.fetch()
 
         assert len(engine.inbox) == 2
@@ -412,13 +412,13 @@ class TestFullFlow:
         assert "[delete]" in display
         assert "[keep]" in display
 
-        with patch("core.mail_engine.default_adapter") as mock_llm:
-            mock_llm.complete.return_value = delete_plan
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = delete_plan
             plan = engine.parse_intent("delete 1")
 
         assert plan.actions[0].indices == [1]
 
-        with patch("core.mail_engine.mail_move_by_uids", return_value=1):
+        with patch("src.core.mail_engine.mail_move_by_uids", return_value=1):
             result = engine.execute(plan.actions[0])
 
         assert "Deleted 1" in result

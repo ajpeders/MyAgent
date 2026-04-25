@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 class AuthResult(BaseModel):
     user_id: str
-    session_id: str
+    token: str
     account: str
 
 
@@ -20,7 +20,6 @@ class ImapAccount(BaseModel):
     port: int = 993
     username: str
     imap_password: str
-    user_password: str  # used to derive the encryption key
 
 
 class ImapAccountResponse(BaseModel):
@@ -29,3 +28,13 @@ class ImapAccountResponse(BaseModel):
     server: str
     username: str
     created_at: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str

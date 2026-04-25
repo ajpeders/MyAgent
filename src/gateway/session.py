@@ -18,6 +18,8 @@ def _connect() -> sqlite3.Connection:
             user_id TEXT NOT NULL,
             mail_engine TEXT,
             imap_accounts TEXT,
+            enc_key TEXT,
+            password_hash TEXT,
             pending TEXT,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
@@ -32,6 +34,7 @@ class SessionState:
     """Persistent session state — identity and mail inbox only."""
     session_id: str = ""
     user_id: str = ""
+    encryption_key: str = ""  # derived from login password, in-memory only
     mail_engine: dict | None = None
     imap_accounts: list[dict] | None = None
     pending: dict | None = None
@@ -40,13 +43,15 @@ class SessionState:
 class SessionStore:
     """Manages conversation sessions linked to users."""
 
-    def create_session(self, user_id: str, imap_accounts: list[dict] | None = None) -> str:
+    def create_session(self, user_id: str, imap_accounts: list[dict] | None = None,
+                       enc_key: str = "") -> str:
         session_id = str(uuid.uuid4())
         now = time.time()
         conn = _connect()
         conn.execute(
-            "INSERT INTO sessions (session_id, user_id, imap_accounts, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (session_id, user_id, json.dumps(imap_accounts) if imap_accounts else None, now, now),
+            "INSERT INTO sessions (session_id, user_id, imap_accounts, enc_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, user_id, json.dumps(imap_accounts) if imap_accounts else None,
+             enc_key, now, now),
         )
         conn.commit()
         conn.close()
@@ -55,7 +60,7 @@ class SessionStore:
     def get_session(self, session_id: str) -> SessionState | None:
         conn = _connect()
         row = conn.execute(
-            "SELECT session_id, user_id, mail_engine, imap_accounts, pending FROM sessions WHERE session_id = ?",
+            "SELECT session_id, user_id, mail_engine, imap_accounts, enc_key, password_hash, pending FROM sessions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
         conn.close()
@@ -66,7 +71,8 @@ class SessionStore:
             user_id=row[1],
             mail_engine=json.loads(row[2]) if row[2] else None,
             imap_accounts=json.loads(row[3]) if row[3] else None,
-            pending=json.loads(row[4]) if row[4] else None,
+            encryption_key=row[4] or "",
+            pending=json.loads(row[6]) if row[6] else None,
         )
 
     def save_session(self, state: SessionState) -> None:
@@ -140,10 +146,10 @@ _session_store = SessionStore()
 def load_session(session_id: str, user_id: str) -> SessionState:
     state = _session_store.get_session(session_id)
     if not state:
-        from services.auth.errors import UserNotFoundError
+        from src.services.auth.errors import UserNotFoundError
         raise UserNotFoundError(f"Session {session_id} not found")
     if state.user_id != user_id:
-        from services.auth.errors import InvalidCredentialsError
+        from src.services.auth.errors import InvalidCredentialsError
         raise InvalidCredentialsError("Session does not belong to this user")
     return state
 

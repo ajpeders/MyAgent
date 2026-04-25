@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.search.service import SearchService, SearchServiceError, ProviderTimeoutError, BrowseError
+from src.services.search.service import SearchService, SearchServiceError, ProviderTimeoutError, BrowseError
 
 
 router = APIRouter()

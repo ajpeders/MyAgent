@@ -12,7 +12,7 @@ from pathlib import Path
 
 import sqlite3
 
-from core.crypto import decrypt_payload, encrypt_payload, hash_password, verify_password
+from src.core.crypto import decrypt_payload, encrypt_payload, hash_password, verify_password
 
 DB_PATH = Path(__file__).parent / "data.db"
 
@@ -42,6 +42,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             email                TEXT UNIQUE NOT NULL,
             password_hash        TEXT,
             encrypted_imap_creds BLOB,
+            is_admin             INTEGER NOT NULL DEFAULT 0,
             created_at           REAL NOT NULL,
             updated_at           REAL NOT NULL
         )
@@ -63,6 +64,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             user_id       TEXT NOT NULL,
             mail_engine   TEXT,
             imap_accounts TEXT,
+            enc_key       TEXT,
+            password_hash TEXT,
+            pending       TEXT,
             created_at    REAL NOT NULL,
             updated_at    REAL NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
@@ -86,7 +90,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Add new columns to existing tables that predate schema changes."""
     migrations = [
         ("ALTER TABLE users ADD COLUMN password_hash TEXT", "users.password_hash"),
+        ("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0", "users.is_admin"),
         ("ALTER TABLE sessions ADD COLUMN imap_accounts TEXT", "sessions.imap_accounts"),
+        ("ALTER TABLE sessions ADD COLUMN enc_key TEXT", "sessions.enc_key"),
+        ("ALTER TABLE sessions ADD COLUMN password_hash TEXT", "sessions.password_hash"),
         ("ALTER TABLE sessions ADD COLUMN pending TEXT", "sessions.pending"),
     ]
     for sql, _ in migrations:
@@ -98,7 +105,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 # Re-export for backward compat
-from services.auth.store import UserStore
-from gateway.session import SessionStore, SessionState
+from src.services.auth.store import UserStore
 
-__all__ = ["_connect", "_init_schema", "_migrate", "_schema_initialized", "DB_PATH", "UserStore", "SessionStore", "SessionState"]
+__all__ = ["_connect", "_init_schema", "_migrate", "_schema_initialized", "DB_PATH", "UserStore"]
