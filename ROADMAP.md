@@ -43,7 +43,7 @@ All 9 issues identified and fixed, 3 test coverage gaps filled.
 
 ## Planned
 
-- [ ] Web tool suite frontend (`../MyWeb`)
+- [x] Web tool suite frontend (`../MyWeb`) — 9 tools, 129 tests, clean build
 - [ ] Redis for session storage (optional/future — SQLite WAL mode sufficient for now)
 
 ## Changelog
