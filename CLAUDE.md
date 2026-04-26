@@ -22,7 +22,7 @@ src/
   services/        Logical service packages (auth, mail, memory, search)
     auth/          User identity, login, IMAP credential encryption
       service.py   AuthService — register, login, IMAP CRUD
-      store.py     UserStore — users table access
+      store.py     UserStore — uses shared DB from core/db.py
       models.py    Pydantic request/response models
       errors.py    AuthServiceError subtypes
     mail/          IMAP fetch, email display, move/delete
@@ -43,8 +43,8 @@ src/
   gateway/         FastAPI server — routes, middleware, session management
     __main__.py    FastAPI app entry point (python -m src.gateway)
     routes/        auth.py, memory.py, search.py, mail.py, chat.py
-    session.py     SessionStore, SessionState — owns sessions table
-    middleware.py  require_api_key, jwt_required, get_token, get_user_id
+    session.py     SessionStore, SessionState — uses shared DB from core/db.py
+    middleware.py  require_api_key, jwt_required, get_token, get_session_id
   core/            Shared utilities — no business logic
     config.py      All config values
     crypto.py      AES-256-GCM encryption, password hashing

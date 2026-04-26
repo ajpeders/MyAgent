@@ -5,15 +5,15 @@ from src.core.config import API_KEY
 from src.core.jwt import decode
 
 
-def require_api_key(request: Request, call_next):
-    """Validate X-API-Key for admin endpoints."""
+async def require_api_key(request: Request, call_next):
+    """Validate X-API-Key for admin endpoints (registered as HTTP middleware)."""
     if API_KEY and request.url.path.startswith("/api/admin"):
         if request.url.path == "/api/admin/login":
-            return call_next(request)
+            return await call_next(request)
         key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
         if key != API_KEY:
             return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
-    return call_next(request)
+    return await call_next(request)
 
 
 def get_token(request: Request) -> str | None:
@@ -41,10 +41,6 @@ def admin_required(request: Request) -> dict:
     if not payload.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return payload
-
-
-def get_user_id(request: Request) -> str | None:
-    return request.headers.get("X-User-ID")
 
 
 def get_session_id(request: Request) -> str | None:

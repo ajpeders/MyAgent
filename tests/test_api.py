@@ -26,8 +26,9 @@ class DummyRequest:
 
 
 class ChatEndpointTests(unittest.IsolatedAsyncioTestCase):
+    @patch("src.gateway.routes.chat.jwt_required", return_value={"user_id": ""})
     @patch("src.gateway.routes.chat.dispatch_session")
-    async def test_chat_without_session_is_stateless(self, dispatch_session):
+    async def test_chat_without_session_is_stateless(self, dispatch_session, _jwt):
         dispatch_session.return_value = [
             {"type": "answer", "content": "4", "agent": "answer"},
         ]
@@ -42,10 +43,11 @@ class ChatEndpointTests(unittest.IsolatedAsyncioTestCase):
         state = dispatch_session.call_args.args[0]
         self.assertEqual(state.session_id, "_stateless")
 
+    @patch("src.gateway.routes.chat.jwt_required", return_value={"user_id": "test-user"})
     @patch("src.gateway.routes.chat.save_session")
     @patch("src.gateway.routes.chat.load_session")
     @patch("src.gateway.routes.chat.dispatch_session")
-    async def test_chat_with_session_loads_and_saves_state(self, dispatch_session, load_session, save_session):
+    async def test_chat_with_session_loads_and_saves_state(self, dispatch_session, load_session, save_session, _jwt):
         state = SessionState(session_id="mail", user_id="test-user")
         load_session.return_value = state
         dispatch_session.return_value = [
@@ -63,7 +65,6 @@ class ChatEndpointTests(unittest.IsolatedAsyncioTestCase):
         from src.gateway.routes.chat import chat
         req = DummyRequest(
             '{"prompt":"check email","model":"test-model","session_id":"mail"}',
-            headers={"X-User-ID": "test-user"},
             query_params={"session_id": "mail"},
         )
         resp = await chat(req)
@@ -87,9 +88,10 @@ class MailEndpointTests(unittest.TestCase):
         state.mail_engine = engine.to_dict()
         return state
 
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
     @patch("src.gateway.routes.mail.save_session")
-    def test_mail_get_returns_inbox_page(self, save_session, load_session):
+    def test_mail_get_returns_inbox_page(self, save_session, load_session, _jwt):
         emails = [{"uid": 1, "from": "a@b.com", "subject": "Hi", "date": "2026-01-01", "body": "", "account": ""}]
         state = self._state_with_inbox(emails)
         load_session.return_value = state
@@ -104,7 +106,7 @@ class MailEndpointTests(unittest.TestCase):
         mock_service.fetch.return_value = mock_result
         mock_service.to_dict.return_value = state.mail_engine
 
-        req = DummyRequest("", headers={"X-User-ID": "u1"}, query_params={"session_id": "s1"})
+        req = DummyRequest("", query_params={"session_id": "s1"})
         with patch("src.gateway.routes.mail.MailService", return_value=mock_service):
             resp = mail_get(req, page=0)
 
@@ -112,24 +114,26 @@ class MailEndpointTests(unittest.TestCase):
         self.assertEqual(resp["emails"][0]["subject"], "Hi")
         self.assertEqual(resp["page"], 1)
 
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
-    def test_mail_get_no_engine_raises_404(self, load_session):
+    def test_mail_get_no_engine_raises_404(self, load_session, _jwt):
         from fastapi import HTTPException
         from src.gateway.routes.mail import mail_get
         state = SessionState(session_id="s1", user_id="u1")
         load_session.return_value = state
 
-        req = DummyRequest("", headers={"X-User-ID": "u1"}, query_params={"session_id": "s1"})
+        req = DummyRequest("", query_params={"session_id": "s1"})
         with self.assertRaises(HTTPException) as raised:
             mail_get(req, page=0)
 
         self.assertEqual(raised.exception.status_code, 404)
 
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
-    def test_mail_get_missing_session_raises_400(self, load_session):
+    def test_mail_get_missing_session_raises_400(self, load_session, _jwt):
         from fastapi import HTTPException
         from src.gateway.routes.mail import mail_get
-        req = DummyRequest("", headers={"X-User-ID": "u1"})
+        req = DummyRequest("")
         with self.assertRaises(HTTPException) as raised:
             mail_get(req, page=0)
         self.assertEqual(raised.exception.status_code, 400)

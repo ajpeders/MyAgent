@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
-from src.gateway.middleware import get_user_id
+from src.gateway.middleware import jwt_required
 from src.services.memory.service import remember, recall, list_memories, forget
 
 
@@ -22,18 +22,17 @@ class MemoryResponse(BaseModel):
 
 @router.post("/api/memory", response_model=MemoryResponse)
 def memory_add(request: Request, body: MemoryAddRequest):
-    user_id = get_user_id(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing X-User-ID header")
+    payload = jwt_required(request)
+    user_id = payload["user_id"]
     memory_id = remember(body.content, user_id)
     return MemoryResponse(memory_id=memory_id, content=body.content)
 
 
 @router.get("/api/memory", response_model=list[MemoryResponse])
 def memory_list(request: Request, q: str = "", top_k: int = 5):
-    user_id = get_user_id(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing X-User-ID header")
+    payload = jwt_required(request)
+    user_id = payload["user_id"]
+    top_k = min(top_k, 100)
     if q:
         results = recall(q, user_id, top_k=top_k)
         return [
@@ -50,9 +49,8 @@ def memory_list(request: Request, q: str = "", top_k: int = 5):
 
 @router.delete("/api/memory/{memory_id}")
 def memory_delete(request: Request, memory_id: str):
-    user_id = get_user_id(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing X-User-ID header")
+    payload = jwt_required(request)
+    user_id = payload["user_id"]
     deleted = forget(memory_id, user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Memory not found")

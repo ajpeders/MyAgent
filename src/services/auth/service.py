@@ -1,5 +1,4 @@
 """Auth service — register, login, IMAP account management."""
-import base64
 import json
 import time
 import uuid
@@ -95,6 +94,15 @@ class AuthService:
         return self._store.verify_password(user_id, password)
 
     def add_imap_account(self, user_id: str, account: ImapAccount, enc_key: str) -> ImapAccountResponse:
+        user = self._store.get_user_by_id(user_id)
+        if not user:
+            raise UserNotFoundError(f"User {user_id} not found")
+        existing = []
+        if user["encrypted_imap_creds"]:
+            blob = user["encrypted_imap_creds"]
+            if isinstance(blob, bytes):
+                blob = blob.decode()
+            existing = json.loads(blob)
         creds_data = {
             "name": account.name,
             "server": account.server,
@@ -103,31 +111,13 @@ class AuthService:
             "imap_password": account.imap_password,
         }
         encrypted = encrypt_payload(creds_data, enc_key)
-        user = self._store.get_user_by_id(user_id)
-        if not user:
-            raise UserNotFoundError(f"User {user_id} not found")
-        existing = []
-        if user["encrypted_imap_creds"]:
-            blob = user["encrypted_imap_creds"]
-            if isinstance(blob, str):
-                blob = blob.encode()
-            try:
-                decoded = base64.b64decode(blob)
-                inner = json.loads(decoded.decode())
-                existing = decrypt_payload(inner, enc_key)
-            except Exception:
-                # legacy raw bytes format
-                existing = json.loads(blob.decode())
-        encrypted_list = existing + [{
+        existing.append({
             "name": account.name,
-            "server": account.server,
-            "port": account.port,
-            "username": account.username,
             "encrypted": encrypted,
-        }]
-        self._store.update_imap_creds(user_id, encrypted_list)
+        })
+        self._store.update_imap_creds(user_id, existing)
         return ImapAccountResponse(
-            id=str(len(encrypted_list) - 1),
+            id=str(len(existing) - 1),
             name=account.name,
             server=account.server,
             username=account.username,
@@ -142,14 +132,10 @@ class AuthService:
         if not user["encrypted_imap_creds"]:
             raise UserNotFoundError(f"Account {account_id} not found")
         blob = user["encrypted_imap_creds"]
-        if isinstance(blob, str):
-            blob = blob.encode()
-        try:
-            decoded = base64.b64decode(blob)
-            inner = json.loads(decoded.decode())
-        except Exception:
-            inner = json.loads(blob.decode())
-        if account_id < 0 or account_id >= len(inner):
+        if isinstance(blob, bytes):
+            blob = blob.decode()
+        accounts = json.loads(blob)
+        if account_id < 0 or account_id >= len(accounts):
             raise UserNotFoundError(f"Account {account_id} not found")
         creds_data = {
             "name": account.name,
@@ -159,14 +145,11 @@ class AuthService:
             "imap_password": account.imap_password,
         }
         encrypted = encrypt_payload(creds_data, enc_key)
-        inner[account_id] = {
+        accounts[account_id] = {
             "name": account.name,
-            "server": account.server,
-            "port": account.port,
-            "username": account.username,
             "encrypted": encrypted,
         }
-        self._store.update_imap_creds(user_id, inner)
+        self._store.update_imap_creds(user_id, accounts)
         return ImapAccountResponse(
             id=str(account_id),
             name=account.name,
@@ -182,13 +165,9 @@ class AuthService:
         if not user["encrypted_imap_creds"]:
             return []
         blob = user["encrypted_imap_creds"]
-        if isinstance(blob, str):
-            blob = blob.encode()
-        try:
-            decoded = base64.b64decode(blob)
-            inner = json.loads(decoded.decode())
-        except Exception:
-            inner = json.loads(blob.decode())
+        if isinstance(blob, bytes):
+            blob = blob.decode()
+        accounts = json.loads(blob)
         return [
             ImapAccountResponse(
                 id=str(i),
@@ -197,7 +176,7 @@ class AuthService:
                 username=a.get("username", ""),
                 created_at="",
             )
-            for i, a in enumerate(inner)
+            for i, a in enumerate(accounts)
         ]
 
     def delete_imap_account(self, user_id: str, account_id: int) -> bool:
@@ -207,16 +186,12 @@ class AuthService:
         if not user["encrypted_imap_creds"]:
             return False
         blob = user["encrypted_imap_creds"]
-        if isinstance(blob, str):
-            blob = blob.encode()
-        try:
-            decoded = base64.b64decode(blob)
-            inner = json.loads(decoded.decode())
-        except Exception:
-            inner = json.loads(blob.decode())
-        if account_id < 0 or account_id >= len(inner):
+        if isinstance(blob, bytes):
+            blob = blob.decode()
+        accounts = json.loads(blob)
+        if account_id < 0 or account_id >= len(accounts):
             return False
-        new_list = [a for i, a in enumerate(inner) if i != account_id]
+        new_list = [a for i, a in enumerate(accounts) if i != account_id]
         self._store.update_imap_creds(user_id, new_list)
         return True
 

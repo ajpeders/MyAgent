@@ -1,4 +1,6 @@
 """LLM service — wraps adapters for structured completions, embeddings, and agent chat."""
+import asyncio
+
 from .adapters import default_adapter, _ADAPTERS
 from .errors import ProviderError, TimeoutError
 
@@ -131,7 +133,6 @@ def _looks_like_plan(content: str) -> bool:
 
 
 # Module-level singleton for convenience
-import asyncio
 _service = LLMService()
 
 

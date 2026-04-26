@@ -187,8 +187,7 @@ async def admin_delete_session(request: Request, session_id: str):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _get_db_size() -> int:
-    from pathlib import Path
-    db_path = Path(__file__).parent.parent.parent / "data.db"
-    if db_path.exists():
-        return db_path.stat().st_size
+    from src.core.db import DB_PATH
+    if DB_PATH.exists():
+        return DB_PATH.stat().st_size
     return 0

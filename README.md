@@ -30,7 +30,7 @@ graph TD
     end
 
     subgraph State["State Layer"]
-        SESSIONS["data.db<br/>SQLite"]
+        SESSIONS["core/data.db<br/>SQLite (single DB)"]
     end
 
     subgraph Routing["Routing"]
@@ -95,8 +95,8 @@ graph TD
 - **LLM**: All calls go through `services/llm/` adapters (Ollama, OpenAI, Anthropic) — never call providers directly
 - **JWT auth**: Tokens contain `user_id` and an AES-256-GCM encrypted `enc_key` (user's password). Sensitive fields are encrypted inside the JWT so intercepting the token reveals nothing.
 - **Tools**: `tools/registry.py` defines tools; `tools/schema.py` builds per-agent JSON schemas
-- **State**: SQLite (`core/db.py`) for users, sessions, and encrypted email cache — each service accesses only its owned tables
-- **Security**: IMAP credentials encrypted at rest with AES-256-GCM, keys derived from user password via PBKDF2
+- **State**: Single SQLite database (`src/core/data.db`) for all tables — users, sessions, memories, calendar events, and encrypted email cache. All modules use `core/db._connect()`. Foreign keys enforced within the single DB.
+- **Security**: All routes (except register/login) require JWT. Admin endpoints require JWT `is_admin` + API key. IMAP credentials encrypted at rest with AES-256-GCM, keys derived from user password via PBKDF2. `enc_key` exists only in the encrypted JWT — never persisted to disk.
 
 ### Project Layout
 
@@ -105,7 +105,7 @@ src/
   services/        Logical service packages — each owns its tables
     auth/          User identity, login, IMAP credential encryption
       service.py   AuthService — register, login, IMAP account CRUD
-      store.py     UserStore — users table
+      store.py     UserStore — uses shared DB from core/db.py
       models.py    Pydantic models (AuthResult, ImapAccount, etc.)
       errors.py    AuthServiceError subtypes
     mail/          IMAP fetch, email display, move/delete
@@ -129,8 +129,8 @@ src/
   gateway/         FastAPI server — routes, middleware, session management
     __main__.py    App entry point (python -m src.gateway)
     routes/        auth, memory, search, mail, chat
-    session.py     SessionStore — owns sessions table
-    middleware.py  require_api_key, jwt_required, get_token, get_user_id
+    session.py     SessionStore, SessionState — uses shared DB from core/db.py
+    middleware.py  require_api_key, jwt_required, get_token, get_session_id
   core/            Shared utilities — no business logic
     config.py      Env-based configuration
     crypto.py      AES-GCM encryption for credentials at rest
@@ -184,7 +184,7 @@ docs/superpowers/
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/account/register` | Create user (email + password), returns JWT |
-| POST | `/api/account/login` | Login, returns JWT with `user_id` + `enc_key` |
+| POST | `/api/account/login` | Login, returns JWT with `user_id` (enc_key encrypted inside token) |
 | POST | `/api/account/logout` | Logout and delete session |
 | GET | `/api/account/me` | Get current user info (JWT required) |
 
@@ -203,19 +203,24 @@ docs/superpowers/
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/memory` | Add a memory |
-| GET | `/api/memory?q=<query>` | Semantic search memories |
+| GET | `/api/memory?q=<query>&top_k=5` | Semantic search memories (top_k max 100) |
 | DELETE | `/api/memory/{memory_id}` | Delete a memory |
+
+*All memory endpoints require `Authorization: Bearer <JWT>`.*
 
 ### Chat & Mail
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/chat` | Send prompt to agent (routes via HeadAgent) |
+| POST | `/api/chat/stream` | SSE streaming version of `/api/chat` |
 | GET | `/api/mail` | Get current inbox page |
 | POST | `/api/mail/fetch` | Fetch inbox from IMAP into session |
 | GET | `/api/mail/by-date?date=YYYY-MM-DD` | Emails on a single date |
 | GET | `/api/mail/by-date?start=...&end=...` | Emails in a date range |
 | GET | `/api/mail/{index}` | Read full email by page-relative index |
 | POST | `/api/mail/move` | Move emails to folder (default Trash) |
+
+*All chat and mail endpoints require `Authorization: Bearer <JWT>`.*
 
 ### Calendar
 | Method | Path | Description |
@@ -241,7 +246,7 @@ docs/superpowers/
 | DELETE | `/api/admin/users/{id}` | Delete user (cascades) |
 | DELETE | `/api/admin/sessions/{id}` | Delete session |
 
-*All admin endpoints require `Authorization: Bearer <JWT>` with `is_admin=true`. Users are auto-promoted to admin if their email matches `ADMIN_EMAILS`.*
+*All admin endpoints require `Authorization: Bearer <JWT>` with `is_admin=true` AND `X-API-Key` header (when `MYDEVTEAM_API_KEY` is set). Users are auto-promoted to admin if their email matches `ADMIN_EMAILS`.*
 
 ## Config
 
@@ -276,12 +281,42 @@ Env vars or `config.py`. Key vars:
 - [x] End-to-end testing of full login → IMAP → mail flow
 - [x] Service architecture: auth, mail, memory, search services with FastAPI gateway
 
-### Planned
+### Planned — Security Audit Fixes (2026-04-25)
+
+**Critical**
+- [x] Auth bypass: chat/mail/memory routes trust `X-User-ID` header with no JWT validation — any caller can impersonate any user
+- [x] `enc_key` (plaintext password) persisted to SQLite sessions table despite "in-memory only" comment
+- [x] `require_api_key` middleware defined but never registered — admin endpoints unguarded by API key
+- [x] Split SQLite databases (`src/data.db`, `src/core/data.db`, `sessions.db`) with divergent schema — cross-DB foreign keys silently fail
+- [x] `import asyncio` after use in `services/llm/service.py` — `NameError` on `embeddings()` call
+
+**Important**
+- [x] `asyncio.run()` called inside running event loop (`executor.py`, `adapters.py`) — `RuntimeError` in production
+- [x] Dead import `_dispatch_plan` in `chat.py` — `ImportError` on streaming path
+- [x] `add_imap_account` encode/decode logic inconsistent with login decoder
+- [x] Unbounded `top_k` in memory search endpoint — no cap on query param
+
+**Test coverage gaps**
+- [x] No tests for IMAP credential add/update/delete round-trip
+- [x] No test for `X-User-ID` impersonation (auth bypass)
+- [x] No cross-user data isolation tests for IMAP credentials
+
+### Planned — Features
 
 - [ ] Web tool suite frontend (`../MyWeb`)
 - [ ] Redis for session storage (optional/future — SQLite WAL mode sufficient for now)
 
 ## Changelog
+
+### 2026-04-25 — Security Audit
+
+Full backend audit identified 9 issues (5 critical, 4 important) and 3 test coverage gaps. Key findings:
+- **Auth bypass**: chat, mail, and memory routes use unverified `X-User-ID` header instead of JWT — allows user impersonation
+- **Plaintext password in DB**: `enc_key` written to sessions table despite being intended as in-memory only
+- **Split databases**: three separate SQLite files with divergent schemas and broken cross-DB foreign keys
+- **Runtime errors**: `asyncio` import ordering bug, `asyncio.run()` inside running event loop, dead import in chat route
+
+See Roadmap → "Security Audit Fixes" for full tracked list.
 
 ### 2026-04-25
 
@@ -311,7 +346,7 @@ Env vars or `config.py`. Key vars:
 - Each service owns its tables and exposes typed error classes mapped to HTTP by the gateway
 - `services/llm/` provides `LLMService` with pluggable adapters (Ollama, OpenAI, Anthropic) and async tool-calling `chat()`
 - `gateway/session.py` owns `SessionStore` (sessions table)
-- `gateway/middleware.py` provides `require_api_key`, `jwt_required`, `get_token`, `get_user_id`
+- `gateway/middleware.py` provides `require_api_key`, `jwt_required`, `get_token`, `get_session_id`
 - `core/` retained for shared utilities only (config, crypto, jwt, executor, agents, tools, docker)
 - Fixed duplicate `recall`/`list_memories`/`forget` bug in memory service
 

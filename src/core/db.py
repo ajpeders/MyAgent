@@ -64,8 +64,6 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             user_id       TEXT NOT NULL,
             mail_engine   TEXT,
             imap_accounts TEXT,
-            enc_key       TEXT,
-            password_hash TEXT,
             pending       TEXT,
             created_at    REAL NOT NULL,
             updated_at    REAL NOT NULL,
@@ -92,7 +90,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("ALTER TABLE users ADD COLUMN password_hash TEXT", "users.password_hash"),
         ("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0", "users.is_admin"),
         ("ALTER TABLE sessions ADD COLUMN imap_accounts TEXT", "sessions.imap_accounts"),
-        ("ALTER TABLE sessions ADD COLUMN enc_key TEXT", "sessions.enc_key"),
         ("ALTER TABLE sessions ADD COLUMN password_hash TEXT", "sessions.password_hash"),
         ("ALTER TABLE sessions ADD COLUMN pending TEXT", "sessions.pending"),
     ]
@@ -104,7 +101,4 @@ def _migrate(conn: sqlite3.Connection) -> None:
             pass  # column already exists
 
 
-# Re-export for backward compat
-from src.services.auth.store import UserStore
-
-__all__ = ["_connect", "_init_schema", "_migrate", "_schema_initialized", "DB_PATH", "UserStore"]
+__all__ = ["_connect", "_init_schema", "_migrate", "_schema_initialized", "DB_PATH"]

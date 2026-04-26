@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.gateway.middleware import get_session_id, get_user_id
+from src.gateway.middleware import get_session_id, jwt_required
 from src.gateway.session import load_session, save_session
 from src.core.executor import dispatch_session
 from src.gateway.session import SessionState
@@ -42,7 +42,8 @@ async def chat(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid request body")
 
-    user_id = get_user_id(request) or ""
+    payload = jwt_required(request)
+    user_id = payload["user_id"]
     session_id = get_session_id(request) or body.session_id
 
     try:
@@ -189,7 +190,6 @@ async def _chat_stream_iterator(
 
 def _dispatch_plan_sync(plan, agent_name, model, state, interactive):
     """Synchronous plan dispatcher for streaming endpoint."""
-    from src.core.executor import _dispatch_plan
     from src.core.actions.action import ActionType
 
     # Minimal re-implementation to avoid circular imports
@@ -251,7 +251,8 @@ async def chat_stream(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid request body")
 
-    user_id = get_user_id(request) or ""
+    payload = jwt_required(request)
+    user_id = payload["user_id"]
     session_id = get_session_id(request) or body.session_id
 
     return StreamingResponse(

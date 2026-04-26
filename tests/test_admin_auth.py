@@ -13,12 +13,9 @@ from src.gateway.session import SessionState
 def _tmp_db(tmp_path, monkeypatch):
     from pathlib import Path
     db_path = Path(tmp_path / "test.db")
-    monkeypatch.setattr("src.services.auth.store.DB_PATH", db_path)
-    monkeypatch.setattr("src.gateway.session.DB_PATH", db_path)
-    import src.services.auth.store
-    import src.gateway.session
-    src.services.auth.store._schema_initialized = False
-    src.gateway.session._schema_initialized = False
+    monkeypatch.setattr("src.core.db.DB_PATH", db_path)
+    import src.core.db
+    src.core.db._schema_initialized = False
 
 
 @pytest.fixture(autouse=True)

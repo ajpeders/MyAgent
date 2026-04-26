@@ -12,8 +12,6 @@ def _tmp_db(tmp_path, monkeypatch):
     db_path = Path(tmp_path / "test.db")
     monkeypatch.setattr("src.core.db.DB_PATH", db_path)
     monkeypatch.setattr("src.core.db._schema_initialized", False)
-    monkeypatch.setattr("src.services.auth.store.DB_PATH", db_path)
-    monkeypatch.setattr("src.services.auth.store._schema_initialized", False)
     monkeypatch.setattr("src.services.calendar.store._migrated", False)
     # Insert synthetic users directly for FK constraints in store-level tests
     from src.core.db import _connect

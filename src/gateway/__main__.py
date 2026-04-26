@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import ALLOWED_ORIGINS
+from src.gateway.middleware import require_api_key
 from src.gateway.routes import auth, memory, search, mail, chat, calendar
 from src.services.llm.routes import router as llm_router
 
@@ -16,6 +17,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.middleware("http")(require_api_key)
 
 app.include_router(auth.router)
 app.include_router(memory.router)

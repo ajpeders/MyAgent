@@ -4,7 +4,7 @@ from datetime import date as date_type, timedelta
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from src.gateway.middleware import get_session_id, get_user_id
+from src.gateway.middleware import get_session_id, jwt_required
 from src.gateway.session import load_session, save_session
 from src.services.mail.service import (
     EmailNotFoundError,
@@ -30,12 +30,11 @@ class MoveRequest(BaseModel):
 
 
 def _require_session(request: Request):
+    payload = jwt_required(request)
+    user_id = payload["user_id"]
     session_id = get_session_id(request)
-    user_id = get_user_id(request)
     if not session_id:
         raise HTTPException(status_code=400, detail="Missing session_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing X-User-ID header")
     return session_id, load_session(session_id, user_id)
 
 

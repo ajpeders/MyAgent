@@ -30,6 +30,14 @@ class LLMAdapter(ABC):
 
     def complete_sync(self, messages: list[dict], schema: dict, model: str) -> str:
         """Synchronous wrapper — use in sync code paths."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, self.complete(messages, schema, model)).result()
         return asyncio.run(self.complete(messages, schema, model))
 
     @abstractmethod

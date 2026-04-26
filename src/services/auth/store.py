@@ -1,63 +1,10 @@
-"""UserStore moved from core/db.py."""
+"""UserStore — uses shared DB from core/db.py."""
 import json
 import time
 import uuid
 
-import sqlite3
-
 from src.core.crypto import hash_password, verify_password
-from pathlib import Path
-
-DB_PATH = Path(__file__).parent.parent.parent / "data.db"
-
-_schema_initialized = False
-
-
-def _connect() -> sqlite3.Connection:
-    global _schema_initialized
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    if not _schema_initialized:
-        _init_schema(conn)
-        _schema_initialized = True
-    return conn
-
-
-def _init_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id              TEXT PRIMARY KEY,
-            email                TEXT UNIQUE NOT NULL,
-            password_hash        TEXT,
-            encrypted_imap_creds BLOB,
-            is_admin             INTEGER NOT NULL DEFAULT 0,
-            created_at           REAL NOT NULL,
-            updated_at           REAL NOT NULL
-        )
-    """)
-    # Migration for existing DBs
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
-        conn.commit()
-    except Exception:
-        pass  # column already exists
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id    TEXT PRIMARY KEY,
-            user_id       TEXT NOT NULL,
-            mail_engine   TEXT,
-            imap_accounts TEXT,
-            enc_key       TEXT,
-            password_hash TEXT,
-            pending       TEXT,
-            created_at    REAL NOT NULL,
-            updated_at    REAL NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-        )
-    """)
-    conn.commit()
+from src.core.db import _connect
 
 
 class UserStore:

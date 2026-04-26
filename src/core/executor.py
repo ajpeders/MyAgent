@@ -165,7 +165,14 @@ class AgentExecutor:
 
     def sync_run(self, prompt: str) -> str:
         """Synchronous wrapper for backward compat."""
-        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, self.run(prompt)).result()
         return asyncio.run(self.run(prompt))
 
     async def run(self, prompt: str) -> str:

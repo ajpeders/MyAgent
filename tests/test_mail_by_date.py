@@ -38,16 +38,14 @@ def state():
 
 
 class TestMailByDateRoute:
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
     @patch("src.core.actions.mail_imap.fetch_by_date", return_value=FAKE_EMAILS)
-    def test_single_date_returns_messages(self, mock_fetch, mock_load, state):
+    def test_single_date_returns_messages(self, mock_fetch, mock_load, _jwt, state):
         mock_load.return_value = state
         from src.gateway.routes.mail import mail_by_date
 
-        req = DummyRequest(
-            headers={"X-User-ID": "u1"},
-            query_params={"session_id": "s1"},
-        )
+        req = DummyRequest(query_params={"session_id": "s1"})
         resp = mail_by_date(req, date="2026-04-25")
 
         assert len(resp["messages"]) == 2
@@ -58,16 +56,14 @@ class TestMailByDateRoute:
         assert call_kwargs.kwargs["since"] == "2026-04-25"
         assert call_kwargs.kwargs["before"] == "2026-04-26"
 
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
     @patch("src.core.actions.mail_imap.fetch_by_date", return_value=FAKE_EMAILS)
-    def test_date_range_returns_messages(self, mock_fetch, mock_load, state):
+    def test_date_range_returns_messages(self, mock_fetch, mock_load, _jwt, state):
         mock_load.return_value = state
         from src.gateway.routes.mail import mail_by_date
 
-        req = DummyRequest(
-            headers={"X-User-ID": "u1"},
-            query_params={"session_id": "s1"},
-        )
+        req = DummyRequest(query_params={"session_id": "s1"})
         resp = mail_by_date(req, start="2026-04-01", end="2026-04-30")
 
         assert "messages" in resp
@@ -75,42 +71,36 @@ class TestMailByDateRoute:
         assert call_kwargs.kwargs["since"] == "2026-04-01"
         assert call_kwargs.kwargs["before"] == "2026-05-01"  # end + 1 day
 
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
-    def test_missing_date_params_raises_400(self, mock_load, state):
+    def test_missing_date_params_raises_400(self, mock_load, _jwt, state):
         mock_load.return_value = state
         from src.gateway.routes.mail import mail_by_date
 
-        req = DummyRequest(
-            headers={"X-User-ID": "u1"},
-            query_params={"session_id": "s1"},
-        )
+        req = DummyRequest(query_params={"session_id": "s1"})
         with pytest.raises(HTTPException) as exc:
             mail_by_date(req)
         assert exc.value.status_code == 400
 
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
     @patch("src.core.actions.mail_imap.fetch_by_date", return_value=[])
-    def test_no_emails_returns_empty(self, mock_fetch, mock_load, state):
+    def test_no_emails_returns_empty(self, mock_fetch, mock_load, _jwt, state):
         mock_load.return_value = state
         from src.gateway.routes.mail import mail_by_date
 
-        req = DummyRequest(
-            headers={"X-User-ID": "u1"},
-            query_params={"session_id": "s1"},
-        )
+        req = DummyRequest(query_params={"session_id": "s1"})
         resp = mail_by_date(req, date="2026-01-01")
         assert resp["messages"] == []
 
+    @patch("src.gateway.routes.mail.jwt_required", return_value={"user_id": "u1"})
     @patch("src.gateway.routes.mail.load_session")
     @patch("src.core.actions.mail_imap.fetch_by_date", side_effect=ValueError("No IMAP accounts"))
-    def test_imap_error_raises_400(self, mock_fetch, mock_load, state):
+    def test_imap_error_raises_400(self, mock_fetch, mock_load, _jwt, state):
         mock_load.return_value = state
         from src.gateway.routes.mail import mail_by_date
 
-        req = DummyRequest(
-            headers={"X-User-ID": "u1"},
-            query_params={"session_id": "s1"},
-        )
+        req = DummyRequest(query_params={"session_id": "s1"})
         with pytest.raises(HTTPException) as exc:
             mail_by_date(req, date="2026-04-25")
         assert exc.value.status_code == 400
