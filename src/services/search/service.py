@@ -49,10 +49,10 @@ def _generate_answer(query: str, results: list[SearchResult]) -> str:
 class SearchService:
     """Web search with configurable provider and LLM answer generation."""
 
-    def search(self, query: str) -> dict:
+    def search(self, query: str, provider_name: str | None = None, skip_answer: bool = False) -> dict:
         """Search the web and return an answer + results list."""
         try:
-            provider = get_provider()
+            provider = get_provider(provider_name)
             results = provider.search(query)
         except Exception as e:
             if "timeout" in str(e).lower():
@@ -60,12 +60,14 @@ class SearchService:
             raise SearchServiceError(f"Search provider error: {e}") from e
 
         if not results:
-            return {"answer": "No results found.", "results": []}
+            return {"answer": "", "results": []}
 
-        try:
-            answer = _generate_answer(query, results)
-        except Exception:
-            answer = " ".join(r.snippet for r in results[:3])
+        answer = ""
+        if not skip_answer:
+            try:
+                answer = _generate_answer(query, results)
+            except Exception:
+                answer = " ".join(r.snippet for r in results[:3])
 
         return {
             "answer": answer,
@@ -99,8 +101,10 @@ class SearchService:
         if "text/html" not in content_type and "application/xhtml" not in content_type:
             raise BrowseError(f"Non-HTML response ({content_type}) for {url}")
 
+        title = url
         try:
             doc = readability.Document(resp.text)
+            title = doc.title() or url
             text = doc.summary()
             text = re.sub(r"<[^>]+>", "", text)
             text = unescape(text)
@@ -109,7 +113,6 @@ class SearchService:
             text = resp.text[:4000]
 
         text = text[:4000]
-        title = doc.title() if hasattr(doc, "title") else url
 
         summary = _browse_summarize(text, url, title)
 
