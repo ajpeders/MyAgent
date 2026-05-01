@@ -4,8 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import ALLOWED_ORIGINS
 from src.gateway.middleware import require_api_key
-from src.gateway.routes import auth, memory, search, mail, chat, calendar
+from src.gateway.routes import auth, memory, search, mail, chat, calendar, news
 from src.services.llm.routes import router as llm_router
+from src.services.whisper.routes import router as whisper_router
 
 
 app = FastAPI()
@@ -26,7 +27,9 @@ app.include_router(search.router)
 app.include_router(mail.router)
 app.include_router(chat.router)
 app.include_router(calendar.router)
+app.include_router(news.router)
 app.include_router(llm_router)
+app.include_router(whisper_router)
 
 
 @app.get("/health")
