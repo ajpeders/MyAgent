@@ -1,6 +1,8 @@
 """News service — source management and RSS feed fetching."""
 import logging
+import re
 from datetime import datetime, timezone
+from html import unescape
 
 import feedparser
 
@@ -102,8 +104,11 @@ def _parse_feed(feed_url: str, topic: str) -> list[dict]:
             published = datetime.now(timezone.utc).isoformat()
 
         summary = getattr(entry, "summary", None)
-        if summary and len(summary) > 500:
-            summary = summary[:497] + "..."
+        if summary:
+            summary = re.sub(r"<[^>]+>", "", summary)
+            summary = unescape(summary).strip()
+            if len(summary) > 500:
+                summary = summary[:497] + "..."
 
         articles.append({
             "title": title,
