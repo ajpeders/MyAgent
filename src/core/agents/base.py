@@ -12,7 +12,7 @@ class AgentDef(ABC):
     tools: list[ToolDef]  # declares which tools this agent can use
 
     @abstractmethod
-    def system_prompt(self) -> str: ...
+    def system_prompt(self, **kwargs) -> str: ...
 
     def plan(self, messages: list[dict], model: str) -> Plan:
         """Call LLM with this agent's scoped schema and return a Plan."""

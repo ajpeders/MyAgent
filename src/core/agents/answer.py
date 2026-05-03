@@ -7,7 +7,7 @@ class AnswerAgent(AgentDef):
     name = "answer"
     tools = ANSWER_TOOLS
 
-    def system_prompt(self) -> str:
+    def system_prompt(self, **kwargs) -> str:
         return build_system_prompt(
             role="a helpful assistant that answers questions and manages notes and preferences",
             tools=self.tools,

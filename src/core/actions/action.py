@@ -40,5 +40,5 @@ class Plan(BaseModel):
 
 
 class AgentRoute(BaseModel):
-    agent: str   # "mail" | "command" | "answer"
+    agent: str   # "mail" | "command" | "core" | "answer"
     intent: str = ""  # brief summary of what the user wants

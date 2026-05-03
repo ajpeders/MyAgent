@@ -355,7 +355,7 @@ def dispatch_session(
 ) -> list[dict]:
     """Legacy sync entry point. Returns list of result dicts."""
     from src.gateway.session import SessionState
-    from src.core.tools.registry import MAIL_TOOLS, ANSWER_TOOLS, COMMAND_TOOLS
+    from src.core.tools.registry import MAIL_TOOLS, ANSWER_TOOLS, COMMAND_TOOLS, CORE_TOOLS
 
     state = SessionState(
         session_id=state.session_id,
@@ -375,6 +375,7 @@ def dispatch_session(
         "mail":    [t.to_dict() for t in MAIL_TOOLS],
         "answer":  [t.to_dict() for t in ANSWER_TOOLS],
         "command": [t.to_dict() for t in COMMAND_TOOLS],
+        "core":    [t.to_dict() for t in CORE_TOOLS],
     }
     tools = tool_map.get(agent_name, [])
 

@@ -9,7 +9,7 @@ _ROUTE_TOOL = ToolDef(
     name="route",
     description="Classify the user's intent and select the right specialist agent.",
     params=[
-        ParamDef("agent",  "string", 'The agent to route to: "mail", "command", or "answer".', required=True),
+        ParamDef("agent",  "string", 'The agent to route to: "mail", "command", "core", or "answer".', required=True),
         ParamDef("intent", "string", "One-line summary of what the user wants.",                required=True),
     ],
 )
@@ -18,6 +18,7 @@ _AGENT_CONTEXT = {
     "Available agents": [
         "mail    — read, move, save, search, or summarize emails",
         "command — run shell commands or system operations in a sandbox",
+        "core    — personal context queries, news questions, cross-domain briefings, daily focus planning",
         "answer  — general questions, notes, memory, everything else",
     ]
 }

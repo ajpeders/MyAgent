@@ -6,7 +6,7 @@ class CommandAgent(AgentDef):
     name = "command"
     tools = COMMAND_TOOLS
 
-    def system_prompt(self) -> str:
+    def system_prompt(self, **kwargs) -> str:
         return build_system_prompt(
             role="a command execution assistant that runs shell commands safely",
             tools=self.tools,

@@ -8,7 +8,7 @@ class MailAgent(AgentDef):
     name = "mail"
     tools = MAIL_TOOLS
 
-    def system_prompt(self) -> str:
+    def system_prompt(self, **kwargs) -> str:
         return build_system_prompt(
             role=(
                 "an email intent parser. You receive the user's command and the current "
