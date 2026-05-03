@@ -115,8 +115,69 @@ DONE = ToolDef(
     description="End the current agent session cleanly.",
 )
 
+# ── Core (personal agent) ────────────────────────────────────────────────────
+
+SEARCH_NEWS = ToolDef(
+    name="search_news",
+    description="Search news articles by keyword, topic, or recency.",
+    params=[
+        ParamDef("query", "string", "Keyword to search for in article titles.", required=True),
+        ParamDef("topic", "string", "Filter by topic category."),
+        ParamDef("days",  "integer", "How many days back to search.", default=7),
+    ],
+)
+
+GET_CURATED = ToolDef(
+    name="get_curated",
+    description="Get latest curated news picks.",
+    params=[
+        ParamDef("count", "integer", "Number of curated articles to return.", default=10),
+    ],
+)
+
+GET_CALENDAR = ToolDef(
+    name="get_calendar",
+    description="Get upcoming calendar events.",
+    params=[
+        ParamDef("days", "integer", "Number of days ahead to look.", default=3),
+    ],
+)
+
+GET_MAIL_SUMMARY = ToolDef(
+    name="get_mail_summary",
+    description="Get recent email subjects and senders.",
+    params=[
+        ParamDef("count", "integer", "Number of recent emails to summarize.", default=20),
+    ],
+)
+
+GET_MEMORIES = ToolDef(
+    name="get_memories",
+    description="Search stored memories about the user.",
+    params=[
+        ParamDef("query", "string", "What to search for in memories.", required=True),
+    ],
+)
+
+GET_PROFILE = ToolDef(
+    name="get_profile",
+    description="Get user interests and recent behavior signals.",
+)
+
+CREATE_CALENDAR_EVENT = ToolDef(
+    name="create_calendar_event",
+    description="Create a calendar event.",
+    params=[
+        ParamDef("title",       "string", "Event title.",       required=True),
+        ParamDef("date",        "string", "Date (YYYY-MM-DD).", required=True),
+        ParamDef("time",        "string", "Time (HH:MM)."),
+        ParamDef("description", "string", "Event description."),
+    ],
+)
+
 # ── Pre-built tool sets (use these when declaring agents) ─────────────────────
 
 MAIL_TOOLS:    list[ToolDef] = [MAIL_READ, MAIL_READ_ALL, MAIL_CREATE_FOLDER, MAIL_MOVE, SUMMARY, ANSWER, ASK_USER, NOTE, REMEMBER, WARNING, DONE]
 COMMAND_TOOLS: list[ToolDef] = [COMMAND, ANSWER, ASK_USER, WARNING, DONE]
 ANSWER_TOOLS:  list[ToolDef] = [ANSWER, SUMMARY, NOTE, REMEMBER, ASK_USER, WEB_SEARCH, PERSONAL_DATA, WARNING, DONE]
+CORE_TOOLS:    list[ToolDef] = [SEARCH_NEWS, GET_CURATED, GET_CALENDAR, GET_MAIL_SUMMARY, GET_MEMORIES, GET_PROFILE, CREATE_CALENDAR_EVENT, ANSWER, REMEMBER, DONE]

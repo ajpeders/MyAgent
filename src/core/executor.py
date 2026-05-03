@@ -42,13 +42,18 @@ def _fmt_email_list(result: dict) -> str:
 
 async def _tool_mail_read(params: dict, ctx: ToolContext) -> str:
     from src.core.mail_engine import MailEngine
-    from src.core.config import MAIL_SUMMARY_COUNT
+    from src.core.config import DEFAULT_MODEL, MAIL_SUMMARY_COUNT
+    from src.services.auth.store import UserStore
+
+    user = UserStore().get_user_by_id(ctx.user_id) if ctx.user_id else None
+    model = (user or {}).get("mail_model") or DEFAULT_MODEL
 
     engine = (
         MailEngine.from_dict(ctx.mail_engine, imap_accounts=ctx.imap_accounts)
         if ctx.mail_engine
-        else MailEngine(model="", imap_accounts=ctx.imap_accounts)
+        else MailEngine(model=model, imap_accounts=ctx.imap_accounts)
     )
+    engine.model = model
     engine.fetch(
         count=params.get("count", MAIL_SUMMARY_COUNT),
         unread_only=params.get("unread_only", False),
@@ -125,16 +130,110 @@ async def _tool_done(params: dict, ctx: ToolContext) -> str:
     return "[done]"
 
 
+async def _tool_search_news(params: dict, ctx: ToolContext) -> str:
+    from src.services.news.store import NewsStore
+
+    query = params.get("query", "")
+    topic = params.get("topic")
+    articles = NewsStore().list_articles(ctx.user_id, topic=topic, limit=20)
+    if query:
+        articles = [a for a in articles if query.lower() in a.get("title", "").lower()]
+    if not articles:
+        return "No news articles found."
+    lines = [f"- {a['title']} ({a['topic']}) — {a.get('url', '')}" for a in articles[:20]]
+    return "\n".join(lines)
+
+
+async def _tool_get_curated(params: dict, ctx: ToolContext) -> str:
+    from src.services.news.store import NewsStore
+
+    limit = params.get("count", 10)
+    articles = NewsStore().list_curated(ctx.user_id, limit=limit)
+    if not articles:
+        return "No curated articles available."
+    lines = [f"- {a['title']} ({a['topic']}): {a.get('summary', '')}" for a in articles]
+    return "\n".join(lines)
+
+
+async def _tool_get_calendar(params: dict, ctx: ToolContext) -> str:
+    import datetime
+    from src.services.calendar.service import CalendarService
+
+    days = params.get("days", 3)
+    today = datetime.date.today()
+    end = today + datetime.timedelta(days=days)
+    events = CalendarService().get_events(ctx.user_id, today.isoformat(), end.isoformat())
+    if not events:
+        return "No upcoming events."
+    lines = []
+    for e in events:
+        time_str = f" at {e.time}" if e.time else ""
+        lines.append(f"- {e.date}{time_str}: {e.title}")
+    return "\n".join(lines)
+
+
+async def _tool_get_mail_summary(params: dict, ctx: ToolContext) -> str:
+    return "Mail not available in this context."
+
+
+async def _tool_get_memories(params: dict, ctx: ToolContext) -> str:
+    from src.core.memory import recall
+
+    query = params.get("query", "")
+    results = recall(query, ctx.user_id, top_k=5)
+    if not results:
+        return "No relevant memories found."
+    lines = [f"- {r['content']} (relevance: {round(r['score'] * 100)}%)" for r in results]
+    return "\n".join(lines)
+
+
+async def _tool_get_profile(params: dict, ctx: ToolContext) -> str:
+    from src.services.profile.service import ProfileService
+
+    try:
+        snapshot = ProfileService().context_snapshot(ctx.user_id)
+        parts = []
+        if snapshot.interests:
+            parts.append(f"Interests: {', '.join(snapshot.interests)}")
+        if snapshot.recent_signals:
+            sig_lines = [f"  - {s.signal_type}: {s.topic}" for s in snapshot.recent_signals[:10]]
+            parts.append("Recent signals:\n" + "\n".join(sig_lines))
+        return "\n".join(parts) if parts else "No profile data available."
+    except Exception:
+        return "Profile unavailable."
+
+
+async def _tool_create_calendar_event(params: dict, ctx: ToolContext) -> str:
+    from src.services.calendar.service import CalendarService
+
+    event = CalendarService().create_event(
+        ctx.user_id,
+        title=params["title"],
+        date=params["date"],
+        time=params.get("time"),
+        description=params.get("description"),
+    )
+    time_str = f" at {event.time}" if event.time else ""
+    return f"Created: {event.title} on {event.date}{time_str}"
+
+
 TOOL_REGISTRY: dict[str, callable] = {
-    "mail_read":     _tool_mail_read,
-    "mail_move":     _tool_mail_move,
-    "web_search":    _tool_web_search,
-    "remember":      _tool_remember,
-    "note":          _tool_note,
-    "personal_data": _tool_personal_data,
-    "command":       _tool_command,
-    "answer":        _tool_answer,
-    "done":          _tool_done,
+    "mail_read":             _tool_mail_read,
+    "mail_move":             _tool_mail_move,
+    "web_search":            _tool_web_search,
+    "remember":              _tool_remember,
+    "note":                  _tool_note,
+    "personal_data":         _tool_personal_data,
+    "command":               _tool_command,
+    "answer":                _tool_answer,
+    "done":                  _tool_done,
+    "search_news":           _tool_search_news,
+    "get_curated":           _tool_get_curated,
+    "get_calendar":          _tool_get_calendar,
+    "get_mail_summary":      _tool_get_mail_summary,
+    "get_memories":          _tool_get_memories,
+    "get_profile":           _tool_get_profile,
+    "create_calendar_event": _tool_create_calendar_event,
 }
 
 
