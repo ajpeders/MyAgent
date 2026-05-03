@@ -4,8 +4,10 @@ from fastapi.responses import JSONResponse
 
 from src.gateway.middleware import admin_required, jwt_required
 from src.services.news.errors import SourceNotFoundError
-from src.services.news.models import CreateSourceRequest, UpdateSourceRequest
+from src.services.news.curator import NewsCurator
+from src.services.news.models import CreateSourceRequest, RatingRequest, UpdateSourceRequest
 from src.services.news.service import NewsService
+from src.services.news.store import NewsStore
 
 router = APIRouter()
 _news = NewsService()
@@ -84,3 +86,38 @@ async def refresh_feeds(request: Request):
     payload = jwt_required(request)
     count = _news.refresh_feeds(payload["user_id"])
     return {"new_articles": count}
+
+
+# ── Curated Feed ────────────────────────────────────────
+
+_store = NewsStore()
+
+
+@router.get("/api/news/curated")
+async def list_curated(request: Request, limit: int = 20, offset: int = 0):
+    payload = jwt_required(request)
+    articles = _store.list_curated(payload["user_id"], limit, offset)
+    return {"articles": articles}
+
+
+@router.post("/api/news/curate")
+async def curate(request: Request):
+    payload = admin_required(request)
+    count = await NewsCurator().curate(payload["user_id"])
+    return {"curated": count}
+
+
+# ── Ratings ─────────────────────────────────────────────
+
+@router.post("/api/news/curated/{curated_id}/rate")
+async def rate_curated(request: Request, curated_id: str, body: RatingRequest):
+    payload = jwt_required(request)
+    _store.rate_curated(payload["user_id"], curated_id, body.rating)
+    return {"status": "ok"}
+
+
+@router.post("/api/news/sources/{source_id}/rate")
+async def rate_source(request: Request, source_id: str, body: RatingRequest):
+    payload = jwt_required(request)
+    _store.rate_source(payload["user_id"], source_id, body.rating)
+    return {"status": "ok"}

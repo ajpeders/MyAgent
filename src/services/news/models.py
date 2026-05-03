@@ -15,6 +15,10 @@ class UpdateSourceRequest(BaseModel):
     enabled: bool
 
 
+class RatingRequest(BaseModel):
+    rating: int  # 1 or -1
+
+
 class NewsSource(BaseModel):
     id: str
     user_id: str
