@@ -1,15 +1,26 @@
 """Gateway server — FastAPI entry point. Orchestrates services."""
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import ALLOWED_ORIGINS
 from src.gateway.middleware import require_api_key
-from src.gateway.routes import auth, memory, search, mail, chat, calendar, news, profile
+from src.gateway.routes import auth, memory, search, mail, chat, calendar, news, profile, schedule
 from src.services.llm.routes import router as llm_router
 from src.services.whisper.routes import router as whisper_router
+from src.services.scheduler.runner import scheduler_loop
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    task = asyncio.create_task(scheduler_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +40,7 @@ app.include_router(chat.router)
 app.include_router(calendar.router)
 app.include_router(news.router)
 app.include_router(profile.router)
+app.include_router(schedule.router)
 app.include_router(llm_router)
 app.include_router(whisper_router)
 
