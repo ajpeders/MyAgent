@@ -76,19 +76,19 @@ DEFAULT_SOURCES: list[dict] = [
 
     # ── Hip Hop ──────────────────────────────────────────
     {
-        "label": "HipHopDX",
+        "label": "XXL Magazine",
         "topic": "Hip Hop",
-        "feed_url": "https://hiphopdx.com/feed",
+        "feed_url": "https://www.xxlmag.com/feed/",
     },
     {
-        "label": "HotNewHipHop",
+        "label": "Rap-Up",
         "topic": "Hip Hop",
-        "feed_url": "https://www.hotnewhiphop.com/rss/news",
+        "feed_url": "https://www.rap-up.com/feed/",
     },
     {
-        "label": "Complex Music",
+        "label": "The Source",
         "topic": "Hip Hop",
-        "feed_url": "https://www.complex.com/feeds/music.xml",
+        "feed_url": "https://thesource.com/feed/",
     },
 
     # ── Gaming ───────────────────────────────────────────
