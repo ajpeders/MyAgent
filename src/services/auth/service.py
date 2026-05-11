@@ -7,6 +7,7 @@ import uuid
 
 from src.core.config import ADMIN_EMAILS, DEFAULT_MODEL, SEARCH_PROVIDER
 from src.core.crypto import decrypt_payload, encrypt_payload
+from src.core.enc_key_cache import default_cache as _enc_key_cache
 from src.core.jwt import create_session_token
 
 DEVICE_TOKEN_PREFIX = "whsk_"
@@ -116,6 +117,7 @@ class AuthService:
 
         session_id = self._session_store.create_session(user["user_id"], imap_accounts=imap_accounts or None)
         token = create_session_token(user["user_id"], enc_key=password, is_admin=is_admin)
+        _enc_key_cache().put(user["user_id"], password)
         return AuthResult(user_id=user["user_id"], session_id=session_id, token=token, account=email)
 
     def _decrypt_imap_accounts(self, user: dict, enc_key: str) -> list[dict]:

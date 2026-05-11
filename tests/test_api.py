@@ -262,7 +262,7 @@ class SearchEndpointTests(unittest.TestCase):
 
         self.assertEqual(resp.answer, "answer")
         get_search_provider.assert_called_once_with("u1")
-        service_search.assert_called_once_with("backend search", provider_name="searx")
+        service_search.assert_called_once_with("backend search", provider_name="searx", skip_answer=False)
 
 
 if __name__ == "__main__":

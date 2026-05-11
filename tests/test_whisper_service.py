@@ -81,22 +81,16 @@ class WhisperServiceSyncTests(unittest.TestCase):
         self.assertIn("decode failed", str(raised.exception))
 
     def test_load_model_raises_config_error_when_dependency_missing(self):
+        # Setting sys.modules[name] = None is the documented Python way to force
+        # ImportError on subsequent `import name` calls. More robust than
+        # patching __builtins__ across Python versions.
         original = sys.modules.pop("faster_whisper", None)
-        service_module = sys.modules["src.services.whisper.service"]
-
-        def raising_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "faster_whisper":
-                raise ImportError("missing")
-            return original_import(name, globals, locals, fromlist, level)
-
-        original_import = service_module.__builtins__["__import__"]
-
+        sys.modules["faster_whisper"] = None
         try:
-            with patch.dict(sys.modules, {}, clear=False):
-                with patch.object(service_module, "__builtins__", dict(service_module.__builtins__, __import__=raising_import)):
-                    with self.assertRaises(WhisperConfigError) as raised:
-                        _load_model("base", "cpu", "int8")
+            with self.assertRaises(WhisperConfigError) as raised:
+                _load_model("base", "cpu", "int8")
         finally:
+            sys.modules.pop("faster_whisper", None)
             if original is not None:
                 sys.modules["faster_whisper"] = original
             _load_model.cache_clear()

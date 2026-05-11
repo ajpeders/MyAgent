@@ -11,8 +11,11 @@ from datetime import datetime
 from typing import Any
 
 from src.core.config import DEFAULT_MODEL
+from src.core.enc_key_cache import default_cache as _enc_key_cache
+from src.services.auth.service import AuthService
 from src.services.calendar.service import CalendarService
 from src.services.llm.service import LLMService
+from src.services.mail.service import MailService
 from src.services.memory.service import MemoryService
 from src.services.search.service import SearchService
 from src.services.whisper.service import WhisperService
@@ -22,7 +25,7 @@ from src.services.whisper.store import WhisperStore
 log = logging.getLogger(__name__)
 
 
-TOOLS = ["save_note", "recall_notes", "create_event", "list_events", "search_web", "answer"]
+TOOLS = ["save_note", "recall_notes", "create_event", "list_events", "read_mail", "search_web", "answer"]
 
 
 AGENT_SCHEMA = {
@@ -46,6 +49,7 @@ Tools:
 - recall_notes(query): semantic search over saved notes. Use for "what did I say about X", "do I have notes on Y".
 - create_event(title, date, time?, description?): add to calendar. date as YYYY-MM-DD, time as HH:MM (24-hour).
 - list_events(start, end): get calendar events in a date range. Both as YYYY-MM-DD.
+- read_mail(count?, unread_only?): fetch recent emails. count defaults to 5. Use for "any new mail", "what's in my inbox", "read me my emails".
 - search_web(query): web search for current facts, news, weather, etc.
 - answer(text): no data tool needed — just answer directly. Use for greetings, opinions, simple Q&A from your own knowledge.
 
@@ -67,6 +71,8 @@ class VoiceAgentService:
         calendar: CalendarService | None = None,
         search: SearchService | None = None,
         store: WhisperStore | None = None,
+        auth: AuthService | None = None,
+        mail_factory=None,
         model: str = DEFAULT_MODEL,
     ):
         self.whisper = whisper or WhisperService()
@@ -75,6 +81,8 @@ class VoiceAgentService:
         self.calendar = calendar or CalendarService()
         self.search = search or SearchService()
         self.store = store or WhisperStore()
+        self.auth = auth or AuthService()
+        self.mail_factory = mail_factory or _default_mail_factory
         self.model = model
 
     async def handle(
@@ -166,6 +174,11 @@ class VoiceAgentService:
             events = self.calendar.get_events(user_id, start, end)
             return [e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in events]
 
+        if tool == "read_mail":
+            count = int(args.get("count") or 5)
+            unread_only = bool(args.get("unread_only"))
+            return self._read_mail(user_id, count=count, unread_only=unread_only)
+
         if tool == "search_web":
             query = _require_str(args, "query")
             return self.search.search(query)
@@ -174,6 +187,38 @@ class VoiceAgentService:
             return None
 
         raise VoiceAgentError(f"Unknown tool: {tool!r}")
+
+    def _read_mail(self, user_id: str, *, count: int, unread_only: bool) -> dict:
+        enc_key = _enc_key_cache().get(user_id)
+        if not enc_key:
+            raise VoiceAgentError(
+                "Mail access needs a fresh login on the web (your encryption key isn't cached). "
+                "Open MyWeb, log in, then try again."
+            )
+        imap_accounts = self.auth.get_decrypted_imap_accounts(user_id, enc_key)
+        if not imap_accounts:
+            return {"emails": [], "total": 0, "note": "No IMAP accounts configured."}
+        mail_service = self.mail_factory(user_id, enc_key, imap_accounts)
+        result = mail_service.fetch(count=max(1, min(count, 20)), unread_only=unread_only, analyze=False)
+        return {
+            "emails": [
+                {
+                    "from": e.get("from"),
+                    "subject": e.get("subject"),
+                    "date": e.get("date"),
+                }
+                for e in (result.emails or [])[:count]
+            ],
+            "total": result.total_emails,
+        }
+
+
+def _default_mail_factory(user_id: str, enc_key: str, imap_accounts: list[dict]):
+    """Build a MailService bound to a transient SessionState — for voice-agent use only."""
+    from src.gateway.session import SessionState
+
+    session = SessionState(session_id=f"voice-{user_id}", user_id=user_id, imap_accounts=imap_accounts)
+    return MailService(session, enc_key=enc_key)
 
 
 def _require_str(args: dict, key: str) -> str:

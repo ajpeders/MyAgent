@@ -81,8 +81,11 @@ def fake_agent(transcription_result):
     search = MagicMock()
     search.search.return_value = {"answer": "It will be sunny.", "results": []}
 
+    auth = MagicMock()
+    auth.get_decrypted_imap_accounts.return_value = []
+
     agent = VoiceAgentService(
-        whisper=whisper, llm=llm, memory=memory, calendar=calendar, search=search,
+        whisper=whisper, llm=llm, memory=memory, calendar=calendar, search=search, auth=auth,
     )
     return agent
 
@@ -172,6 +175,59 @@ class TestListEvents:
         assert body["tool"] == "list_events"
         assert len(body["result"]) == 1
         assert body["result"][0]["title"] == "Dentist"
+
+
+class TestReadMail:
+    def test_returns_helpful_error_without_cached_enc_key(self, client, jwt_headers, fake_agent):
+        from src.core.enc_key_cache import default_cache
+        default_cache().clear_all()
+        fake_agent.llm.complete.return_value = _plan(
+            "read_mail", {"count": 3}, "Here's your mail."
+        )
+        r = client.post("/api/whisper/agent", content=b"audio", headers=jwt_headers)
+        body = r.json()
+        assert body["tool"] == "read_mail"
+        assert body["error"] is not None
+        assert "log" in body["error"].lower() or "encryption key" in body["error"]
+
+    def test_returns_emails_when_enc_key_cached(self, client, jwt_headers, fake_agent, user):
+        from src.core.enc_key_cache import default_cache
+        default_cache().put(user, "password-from-login")
+
+        fake_agent.auth.get_decrypted_imap_accounts.return_value = [
+            {"name": "gmail", "host": "imap.gmail.com", "port": 993, "user": "u", "password": "p"}
+        ]
+
+        from unittest.mock import MagicMock
+        fake_mail = MagicMock()
+        fake_mail.fetch.return_value = MagicMock(
+            emails=[
+                {"from": "alice@x.com", "subject": "Lunch?", "date": "2026-05-11"},
+                {"from": "bob@y.com", "subject": "Report", "date": "2026-05-10"},
+            ],
+            page=1, total_pages=1, total_emails=2, content="",
+        )
+        fake_agent.mail_factory = lambda *_args, **_kw: fake_mail
+
+        fake_agent.llm.complete.return_value = _plan(
+            "read_mail", {"count": 5}, "You have 2 emails: lunch from Alice, report from Bob."
+        )
+        r = client.post("/api/whisper/agent", content=b"audio", headers=jwt_headers)
+        body = r.json()
+        assert body["tool"] == "read_mail"
+        assert body["result"]["total"] == 2
+        assert body["result"]["emails"][0]["subject"] == "Lunch?"
+
+    def test_no_imap_accounts_returns_friendly_note(self, client, jwt_headers, fake_agent, user):
+        from src.core.enc_key_cache import default_cache
+        default_cache().put(user, "password-from-login")
+        fake_agent.auth.get_decrypted_imap_accounts.return_value = []
+        fake_agent.llm.complete.return_value = _plan(
+            "read_mail", {}, "No mail configured."
+        )
+        r = client.post("/api/whisper/agent", content=b"audio", headers=jwt_headers)
+        body = r.json()
+        assert body["result"] == {"emails": [], "total": 0, "note": "No IMAP accounts configured."}
 
 
 class TestSearchWeb:

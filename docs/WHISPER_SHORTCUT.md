@@ -159,6 +159,7 @@ The agent picks **one** tool per command. Available tools:
 | `recall_notes` | "what did I say about…", "do I have notes on…" | Semantic search of saved notes |
 | `create_event` | "add lunch with Bob Friday at noon" | New calendar event |
 | `list_events` | "what's on my calendar tomorrow" | Queries calendar in a date range |
+| `read_mail` | "any new mail", "read me my inbox" | Recent emails (subject/from/date). Requires recent web login. |
 | `search_web` | "weather in Austin", "who won the game" | Web search via configured provider |
 | `answer` | greetings, opinions, general Q&A | Pure LLM answer, no data access |
 

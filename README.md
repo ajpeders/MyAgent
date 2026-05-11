@@ -1,4 +1,4 @@
-# MyDevTeam
+# MyAgent
 
 Personal local LLM agent with structured tool dispatch. Runs via Ollama (default: `qwen3:8b`).
 
@@ -143,7 +143,7 @@ cd ../MyWeb && npm run dev    # Vite dev server on :5173, proxies /api to :8000
 | GET | `/api/whisper/transcripts` | List the user's saved transcripts (JWT only) |
 | DELETE | `/api/whisper/transcripts/{id}` | Delete a transcript (JWT only) |
 
-**Voice agent toolbox** (used by `/agent` and `/agent/async`): `save_note`, `recall_notes`, `create_event`, `list_events`, `search_web`, `answer`. The LLM picks one based on the transcript, the server executes via the existing services, and returns a short spoken-language reply.
+**Voice agent toolbox** (used by `/agent` and `/agent/async`): `save_note`, `recall_notes`, `create_event`, `list_events`, `read_mail`, `search_web`, `answer`. The LLM picks one based on the transcript, the server executes via the existing services, and returns a short spoken-language reply. `read_mail` requires a recent web login (caches your encryption key in memory for 24h).
 
 *Both POST endpoints accept either `Authorization: Bearer <JWT>` or `X-Device-Token: whsk_…` (long-lived per-user token for iPhone Shortcuts). See [docs/WHISPER_SHORTCUT.md](docs/WHISPER_SHORTCUT.md).*
 
