@@ -20,6 +20,11 @@ graph TD
         MAIL["MailAgent<br/>(mail tools)"]
         CMD["CommandAgent<br/>(command tools)"]
         ANS["AnswerAgent<br/>(answer tools)"]
+        CORE["CoreAgent<br/>(personal-assistant routing)"]
+    end
+
+    subgraph Background["Background"]
+        SCHED["scheduler_loop<br/>services/scheduler/runner.py"]
     end
 
     subgraph Execution["Execution"]
@@ -33,9 +38,13 @@ graph TD
         OLLAMA["Ollama<br/>(qwen3:8b)"]
     end
 
+    subgraph Speech["Speech"]
+        WHISPERSVC["WhisperService<br/>services/whisper"]
+        WHISPER["faster-whisper"]
+    end
+
     subgraph External["External Systems"]
         IMAP["IMAP<br/>(multi-account)"]
-        APPLEMAIL["Apple Mail<br/>(AppleScript fallback)"]
         DOCKER["Docker Sandbox"]
     end
 
@@ -47,10 +56,15 @@ graph TD
     HEAD --> MAIL
     HEAD --> CMD
     HEAD --> ANS
+    HEAD --> CORE
 
     MAIL --> EXECUTOR
     CMD --> EXECUTOR
     ANS --> EXECUTOR
+    CORE --> EXECUTOR
+
+    HTTP -.->|"FastAPI lifespan"| SCHED
+    SCHED --> LLMSVC
 
     EXECUTOR --> LLMSVC
     EXECUTOR --> MAILENGINE
@@ -58,9 +72,10 @@ graph TD
     HEAD --> ADAPTER
     LLMSVC --> ADAPTER
     ADAPTER --> OLLAMA
+    HTTP --> WHISPERSVC
+    WHISPERSVC --> WHISPER
 
     MAILENGINE --> IMAP
-    MAILENGINE --> APPLEMAIL
     EXECUTOR --> DOCKER
 ```
 
@@ -95,11 +110,38 @@ src/
     search/        Web search + URL browsing
       service.py   SearchService — search() and browse()
       providers.py DuckDuckGo, Searx, Google providers
+    whisper/       Local speech-to-text + voice-to-agent + async jobs
+      service.py   WhisperService — raw audio transcription (faster-whisper)
+      store.py     WhisperStore — owns whisper_transcripts table
+      agent.py     VoiceAgentService — transcribe → LLM tool pick → execute → reply
+                   (6 tools: save_note, recall_notes, create_event, list_events,
+                   search_web, answer)
+      jobs.py      JobStore (owns voice_jobs table) + NtfyNotifier (ntfy.sh push)
+      routes.py    /api/whisper/transcribe (sync),
+                   /api/whisper/agent (sync agent),
+                   /api/whisper/agent/async (202 + push via ntfy),
+                   /api/whisper/jobs/{id} (poll async job),
+                   /api/whisper/transcripts (list/delete)
+      models.py    Transcription + history models
+      errors.py    Whisper / transcription / voice-agent errors
     calendar/      Per-user calendar events
       service.py   CalendarService — create, list, delete
       store.py     CalendarStore — owns calendar_events table
       models.py    CreateEventRequest, CalendarEvent
       errors.py    EventNotFoundError
+    news/          Personalized news ingestion + LLM curation
+      service.py   NewsService — source CRUD, feed refresh, article listing
+      store.py     NewsStore — owns news_sources, news_articles,
+                   curated_articles, curated_ratings, source_ratings
+      curator.py   NewsCurator — LLM-driven For You feed builder
+    profile/       User interests, model preferences, usage signals
+      service.py   ProfileService — interests, model config, signals
+      store.py     ProfileStore — owns user_profile, profile_signals
+    scheduler/     Background task scheduler
+      service.py   SchedulerService — list/update scheduled tasks
+      runner.py    scheduler_loop — async lifespan task on the gateway
+      store.py     SchedulerStore — owns scheduled_tasks
+    interfaces.py  Protocol definitions shared across services
     llm/           LLM abstraction layer
       service.py   LLMService — chat, complete, embeddings, streaming
       adapters.py  Pluggable adapters (Ollama, OpenAI, Anthropic)
@@ -140,17 +182,16 @@ docs/superpowers/
 
 1. User says "check my email"
 2. `MailEngine.fetch()` reads emails via IMAP and stores in session
-3. `MailEngine.recommend()` calls LLM once to tag emails as keep/delete/save
+3. `MailEngine.recommend()` calls the LLM once to tag emails with actionable recommendations
 4. `MailEngine.display()` renders the current page deterministically (no LLM)
 5. User interacts: read, delete, next, previous, page N
 6. `MailEngine.handle()` parses intent with current-page context, resolves page-relative indices to cached UIDs
 7. Destructive actions return confirmation; confirmed moves update cache and redisplay
 8. "done" clears the mail session
 
-### Mail Backends
+### Mail Backend
 
-- **IMAP** (`actions/mail_imap.py`): Primary backend, cross-platform. Configured via env vars or encrypted user credentials.
-- **AppleScript** (`actions/mail_applescript.py`): macOS-only fallback for Mail.app.
+- **IMAP** (`actions/mail_imap.py`): Cross-platform backend. Configured via env vars or encrypted user credentials.
 - **Multi-account**: Multiple IMAP accounts supported. First fetch asks which account. Each email carries its `account` field for targeted moves/deletes.
 - **Folder resolution**: Provider-specific — `Trash` maps to `[Gmail]/Trash` on Gmail, `Trash` on Yahoo, etc.
 
@@ -161,9 +202,20 @@ Single SQLite database at `src/core/data.db`. All tables created by `core/db._in
 | Table | Owner | Description |
 |-------|-------|-------------|
 | `users` | `auth/store.py` | User accounts with password hashes and encrypted IMAP creds |
-| `sessions` | `gateway/session.py` | Per-user sessions with mail engine state |
-| `memories` | `memory/service.py` | Per-user semantic facts with embedding vectors |
+| `sessions` | `gateway/session.py` (schema in `core/db.py`) | Per-user sessions with mail engine state |
+| `memories` | `memory/service.py` (schema in `core/db.py`) | Per-user semantic facts with embedding vectors |
 | `calendar_events` | `calendar/store.py` | Per-user calendar events |
 | `email_cache` | `core/db.py` | Encrypted email cache per user/account/mailbox |
+| `email_messages` | `core/db.py` | Persistent per-message store backing the mail pages |
+| `email_sync_state` | `core/db.py` | Per-account IMAP sync cursors (last UID, last sync) |
+| `email_actions` | `core/db.py` | Log of user mail actions (moves/deletes/recommendations) |
+| `news_sources` | `services/news/store.py` | Per-user RSS/Atom source list with topic + enabled flag |
+| `news_articles` | `services/news/store.py` | Ingested articles keyed by source |
+| `curated_articles` | `services/news/store.py` | LLM-selected For You picks per user |
+| `curated_ratings` | `services/news/store.py` | Thumbs up/down on curated articles |
+| `source_ratings` | `services/news/store.py` | Per-source ranking signal |
+| `user_profile` | `services/profile/store.py` | Interests + model config per user |
+| `profile_signals` | `services/profile/store.py` | Recent view/like/dismiss signals |
+| `scheduled_tasks` | `services/scheduler/store.py` | Cron-style background tasks per user |
 
 All tables use `FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE`.

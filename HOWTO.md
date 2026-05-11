@@ -10,7 +10,7 @@
 python -m src.gateway
 
 # Or with auto-reload
-uvicorn src.gateway:app --reload
+uvicorn src.gateway.__main__:app --reload
 ```
 
 Server runs on `http://localhost:8000`. Health check: `GET /health`.
@@ -35,16 +35,17 @@ curl -X POST http://localhost:8000/api/account/register \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com", "password": "your-password"}'
 
-# Login (returns JWT token)
+# Login (returns JWT token plus server session id)
 curl -X POST http://localhost:8000/api/account/login \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com", "password": "your-password"}'
-# Response: {"user_id": "...", "token": "...", "account": "you@example.com"}
+# Response: {"user_id": "...", "session_id": "...", "token": "...", "account": "you@example.com"}
 ```
 
 Save the `token` — all subsequent requests need it:
 ```bash
 TOKEN="<your-jwt-token>"
+SESSION_ID="<your-session-id>"
 ```
 
 ## Add an IMAP Account
@@ -76,9 +77,9 @@ curl -X POST http://localhost:8000/api/chat \
 # With session (for mail, multi-turn)
 curl -X POST http://localhost:8000/api/chat \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Session-ID: my-session" \
+  -H "X-Session-ID: $SESSION_ID" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "check my email", "session_id": "my-session"}'
+  -d "{\"prompt\": \"check my email\", \"session_id\": \"$SESSION_ID\"}"
 ```
 
 ## Use the Memory API
@@ -115,6 +116,70 @@ curl "http://localhost:8000/api/calendar/events?start=2026-04-01&end=2026-04-30"
 # Delete event
 curl -X DELETE http://localhost:8000/api/calendar/events/<event_id> \
   -H "Authorization: Bearer $TOKEN"
+```
+
+## Use the News API
+
+Personalized news feed — register RSS/Atom sources, refresh feeds, and read an LLM-curated For You list.
+
+```bash
+# Add a source (admin only)
+curl -X POST http://localhost:8000/api/news/sources \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "Hacker News", "topic": "tech", "feed_url": "https://news.ycombinator.com/rss"}'
+
+# Pull fresh articles and read the curated feed
+curl -X POST http://localhost:8000/api/news/refresh -H "Authorization: Bearer $TOKEN"
+curl "http://localhost:8000/api/news/curated?limit=20" -H "Authorization: Bearer $TOKEN"
+```
+
+## Use the Profile API
+
+Stores interests, per-task model preferences, and usage signals that feed news curation and the CoreAgent system prompt.
+
+```bash
+# Get profile (interests + model config)
+curl http://localhost:8000/api/profile -H "Authorization: Bearer $TOKEN"
+
+# Replace interest tags
+curl -X PUT http://localhost:8000/api/profile/interests \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"interests": ["machine learning", "homelab", "hiking"]}'
+```
+
+## Use the Schedule API
+
+List and edit the cron-style scheduled tasks the background `scheduler_loop` runs.
+
+```bash
+# List the user's tasks
+curl http://localhost:8000/api/schedule -H "Authorization: Bearer $TOKEN"
+
+# Enable/disable or re-cron a task
+curl -X PUT http://localhost:8000/api/schedule/<task_id> \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"schedule": "0 7 * * *", "enabled": true}'
+```
+
+## Configure Mail and Search Provider
+
+`/api/config/mail` controls the model + free-text preferences used for mail summarization; `/api/config/search` chooses the web search backend.
+
+```bash
+# Set the mail model and preferences
+curl -X PUT http://localhost:8000/api/config/mail \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"mail_model": "qwen3:8b", "mail_preferences": "Surface receipts and travel; ignore newsletters."}'
+
+# Switch search provider (validated against /api/config/search GET list)
+curl -X PUT http://localhost:8000/api/config/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"search_provider": "duckduckgo"}'
 ```
 
 ## Add a New Agent

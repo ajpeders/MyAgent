@@ -1,5 +1,10 @@
 # Roadmap
 
+## Released — 2026-05-11 (MyProject v0.1)
+
+- Packaging fix: `pip install -e .` works again. `pyproject.toml` had stale wheel paths `src/cli` + `src/server` (left over from a rename) replaced with the real `src/gateway` + `src/services`.
+- Docs aligned with code: News/Profile/Schedule/Mail-config/LLM route groups added to README; ARCHITECTURE updated with CoreAgent + scheduler background loop; ROADMAP changelog appended with services shipped 2026-04-29 → 2026-05-03; uvicorn entry corrected to `src.gateway.__main__:app`.
+
 ## Done
 
 - [x] Project rename: MyAgent to MyDevTeam
@@ -47,6 +52,29 @@ All 9 issues identified and fixed, 3 test coverage gaps filled.
 - [ ] Redis for session storage (optional/future — SQLite WAL mode sufficient for now)
 
 ## Changelog
+
+### 2026-05-03 — CoreAgent shipped
+
+- Personal-assistant agent (`src/core/agents/__init__.py`, `src/core/agents/core.py`) registered alongside Mail/Command/Answer; HeadAgent routes generic personal-context queries here
+- Uses `ProfileService.context_snapshot()` to inject the user's interests, models, and recent signals into the system prompt
+
+### 2026-05-03 — Scheduler service shipped
+
+- New `src/services/scheduler/` package with `SchedulerService`, `SchedulerStore`, and a `scheduler_loop` background task
+- `scheduled_tasks` table owned by `services/scheduler/store.py`; loop wired into the gateway `lifespan` in `src/gateway/__main__.py`
+- `/api/schedule` GET + `/api/schedule/{task_id}` PUT for listing/updating cron tasks
+
+### 2026-05-01 — Profile service shipped
+
+- New `src/services/profile/` package — interests, model configuration, and usage-signal tracking per user
+- Tables `user_profile` and `profile_signals` owned by `services/profile/store.py`
+- `/api/profile`, `/api/profile/interests`, `/api/profile/models`, `/api/profile/signal` endpoints
+
+### 2026-04-29 — News service shipped
+
+- New `src/services/news/` package — source CRUD, feed refresh, LLM-driven curation, and rating signals
+- Tables `news_sources`, `news_articles`, `curated_articles`, `curated_ratings`, `source_ratings` owned by `services/news/store.py`
+- `/api/news/*` endpoints: sources, articles, refresh, curated, curate, ratings
 
 ### 2026-04-25 — Security Audit
 

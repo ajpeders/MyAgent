@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/core", "src/cli", "src/server"]
+packages = ["src/core", "src/gateway", "src/services"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

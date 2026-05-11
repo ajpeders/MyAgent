@@ -7,7 +7,7 @@ Personal local LLM agent with structured tool dispatch. Runs via Ollama (default
 ```bash
 # Server
 ./start.sh
-python -m src.gateway  # or: uvicorn src.gateway:app --reload
+python -m src.gateway  # or: uvicorn src.gateway.__main__:app --reload
 
 # Tests
 .venv/bin/python -m pytest tests/ -v
@@ -32,12 +32,12 @@ cd ../MyWeb && npm run dev    # Vite dev server on :5173, proxies /api to :8000
 ### Auth & Account
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/account/register` | Create user (email + password), returns JWT |
-| POST | `/api/account/login` | Login, returns JWT with `user_id` (enc_key encrypted inside token) |
+| POST | `/api/account/register` | Create user, returns `{ user_id, session_id, token, account }` |
+| POST | `/api/account/login` | Login, returns `{ user_id, session_id, token, account }` |
 | POST | `/api/account/logout` | Logout and delete session |
 | GET | `/api/account/me` | Get current user info (JWT required) |
 
-### Config (IMAP)
+### Config (IMAP, Mail, Search)
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/config/imap` | List IMAP accounts (metadata only) |
@@ -45,8 +45,19 @@ cd ../MyWeb && npm run dev    # Vite dev server on :5173, proxies /api to :8000
 | GET | `/api/config/imap/{id}` | Get single IMAP account |
 | PUT | `/api/config/imap/{id}` | Update IMAP account |
 | DELETE | `/api/config/imap/{id}` | Remove IMAP account |
+| GET | `/api/config/mail` | Get mail model + preferences + available models |
+| PUT | `/api/config/mail` | Update mail model and free-text preferences |
+| GET | `/api/config/search` | Get current search provider + available providers |
+| PUT | `/api/config/search` | Update search provider (validated against list) |
 
 *All `/api/config/*` endpoints require `Authorization: Bearer <JWT>` header.*
+
+### Legacy IMAP (redirects to `/api/config/imap`)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/imap` | Legacy alias for `GET /api/config/imap` |
+| POST | `/api/imap` | Legacy alias for `POST /api/config/imap` |
+| DELETE | `/api/imap/{id}` | Legacy alias for `DELETE /api/config/imap/{id}` |
 
 ### Memory
 | Method | Path | Description |
@@ -85,6 +96,63 @@ cd ../MyWeb && npm run dev    # Vite dev server on :5173, proxies /api to :8000
 |--------|------|-------------|
 | POST | `/api/search` | Search the web, returns conversational answer + results |
 | GET | `/api/search/browse?url=<url>` | Fetch and summarize a URL via LLM |
+
+### News
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/news/sources` | List configured news sources for current user |
+| POST | `/api/news/sources` | Add a news source (admin) |
+| PUT | `/api/news/sources/{id}` | Enable/disable a source (admin) |
+| DELETE | `/api/news/sources/{id}` | Remove a source (admin) |
+| POST | `/api/news/sources/seed` | Seed default sources (admin) |
+| GET | `/api/news/articles` | List ingested articles (filter by topic/source) |
+| POST | `/api/news/refresh` | Re-fetch all enabled feeds, returns new-article count |
+| GET | `/api/news/curated` | LLM-curated For You feed |
+| POST | `/api/news/curate` | Run curator over fresh articles (admin) |
+| POST | `/api/news/curated/{id}/rate` | Rate a curated article (thumbs up/down) |
+| POST | `/api/news/sources/{id}/rate` | Rate a source for ranking signal |
+
+### Profile
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/profile` | Get current user's interests + model config |
+| PUT | `/api/profile/interests` | Replace interest tags |
+| PUT | `/api/profile/models` | Update per-task LLM model config |
+| POST | `/api/profile/signal` | Log a usage signal (view/like/dismiss) |
+
+### Schedule
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/schedule` | List the user's scheduled tasks |
+| PUT | `/api/schedule/{task_id}` | Update schedule cron or enabled flag |
+
+### LLM (direct provider passthrough)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/llm/chat` | Agent-style chat with optional tool definitions |
+| POST | `/api/llm/complete` | Structured completion against an optional JSON schema |
+| POST | `/api/llm/embeddings` | Get embedding vector for a text input |
+
+### Whisper (voice)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/whisper/transcribe` | Transcribe raw audio bytes; persists transcript |
+| POST | `/api/whisper/agent` | Voice → single-shot agent: transcribe + pick one tool + reply (synchronous) |
+| POST | `/api/whisper/agent/async` | Same as above but returns `202 + job_id` immediately; reply pushed via ntfy |
+| GET | `/api/whisper/jobs/{id}` | Poll an async voice agent job |
+| GET | `/api/whisper/transcripts` | List the user's saved transcripts (JWT only) |
+| DELETE | `/api/whisper/transcripts/{id}` | Delete a transcript (JWT only) |
+
+**Voice agent toolbox** (used by `/agent` and `/agent/async`): `save_note`, `recall_notes`, `create_event`, `list_events`, `search_web`, `answer`. The LLM picks one based on the transcript, the server executes via the existing services, and returns a short spoken-language reply.
+
+*Both POST endpoints accept either `Authorization: Bearer <JWT>` or `X-Device-Token: whsk_…` (long-lived per-user token for iPhone Shortcuts). See [docs/WHISPER_SHORTCUT.md](docs/WHISPER_SHORTCUT.md).*
+
+### Device tokens (auth for external integrations)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/auth/device-token` | Create or rotate the user's device token (returns plaintext once) |
+| GET | `/api/auth/device-token` | Get token metadata (exists, last4, created_at) |
+| DELETE | `/api/auth/device-token` | Revoke the current device token |
 
 ### Admin
 | Method | Path | Description |
