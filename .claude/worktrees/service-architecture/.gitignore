@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local runtime state
+memory.json
+memory/
+sessions.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Local/editor settings
+.DS_Store
+.env
+.env.*
+.claude/settings.local.json
+
+# Logs
+*.log

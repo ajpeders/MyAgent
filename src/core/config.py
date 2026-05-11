@@ -1,4 +1,5 @@
 import os
+import secrets
 
 from dotenv import load_dotenv
 
@@ -14,6 +15,9 @@ PORT = int(os.environ.get("PORT", 8000))
 API_KEY = os.environ.get("MYDEVTEAM_API_KEY", "")  # empty = no auth (local dev only)
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
+if not JWT_SECRET:
+    # Local dev fallback so auth endpoints do not hard-fail when .env is missing.
+    JWT_SECRET = secrets.token_urlsafe(48)
 JWT_EXPIRY_HOURS = int(os.environ.get("JWT_EXPIRY_HOURS", "168"))  # 7 days
 
 # Admin emails — users with these emails are auto-promoted to admin on login/register
@@ -37,6 +41,17 @@ SEARCH_LLM_PROVIDER = os.environ.get("SEARCH_LLM_PROVIDER", "ollama")
 SEARCH_LLM_MODEL = os.environ.get("SEARCH_LLM_MODEL", "qwen3:8b")
 SEARCH_OPENAI_MODEL = os.environ.get("SEARCH_OPENAI_MODEL", "gpt-4o-mini")
 SEARCH_ANTHROPIC_MODEL = os.environ.get("SEARCH_ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+# Whisper transcription
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
+WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "auto")
+WHISPER_BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
+
+# Voice agent push notifications (ntfy.sh)
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+NTFY_BASE_URL = os.environ.get("NTFY_BASE_URL", "https://ntfy.sh")
+NTFY_AUTH = os.environ.get("NTFY_AUTH", "")  # full Authorization header value, e.g. "Bearer tk_xxx" or "Basic <b64>"
 
 # IMAP accounts — discovered from IMAP_<NAME>_HOST/USER/PASS env vars
 IMAP_ACCOUNTS: list[dict] = []

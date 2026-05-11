@@ -1,6 +1,6 @@
 import subprocess
 
-from src.core.config import TARGET_MAILBOX
+from config import TARGET_MAILBOX
 
 
 def fetch_mailboxes(exclude: str = "") -> list[str]:
@@ -34,12 +34,7 @@ def refresh_mail():
     subprocess.run(["osascript", "-e", script], capture_output=True, env={**__import__('os').environ, "TERM": "dumb"})
 
 
-def read_emails(
-    count: int = 10,
-    unread_only: bool = False,
-    mailbox: str = TARGET_MAILBOX,
-    account_name: str = "",
-) -> list[dict]:
+def read_emails(count: int = 10, unread_only: bool = False, mailbox: str = TARGET_MAILBOX) -> list[dict]:
     filter_clause = "whose read status is false" if unread_only else ""
     script = f"""
     tell application "Mail"
@@ -71,14 +66,7 @@ def read_emails(
     return emails
 
 
-def move_emails(
-    filter_from: str = "",
-    filter_subject: str = "",
-    folder: str = "Archive",
-    mailbox: str = TARGET_MAILBOX,
-    account_name: str = "",
-    inbox: list[dict] | None = None,
-) -> int:
+def move_emails(filter_from: str = "", filter_subject: str = "", folder: str = "Archive", mailbox: str = TARGET_MAILBOX) -> int:
     conditions = []
     if filter_from:
         conditions.append(f'sender contains "{filter_from}"')
@@ -101,16 +89,6 @@ def move_emails(
         return int(result.stdout.strip())
     except ValueError:
         return 0
-
-
-def move_by_uids(
-    uids: list[int],
-    folder: str = "Trash",
-    mailbox: str = TARGET_MAILBOX,
-    account_name: str = "",
-) -> int:
-    """AppleScript fallback cannot safely address messages by IMAP UID."""
-    raise NotImplementedError("AppleScript mail backend does not support UID-based moves")
 
 
 def email_matches(email: dict, filter_from: str, filter_subject: str) -> bool:

@@ -87,6 +87,16 @@ class TestImapCrud:
 
         login_result = auth.login("carol@test.com", password)
         assert login_result.user_id == reg.user_id
+        from src.gateway.session import SessionStore
+        session = SessionStore().get_session(login_result.session_id)
+        assert session is not None
+        assert session.imap_accounts == [{
+            "name": account_gmail.name,
+            "host": account_gmail.server,
+            "port": account_gmail.port,
+            "user": account_gmail.username,
+            "password": account_gmail.imap_password,
+        }]
 
     def test_update_account(self, auth, account_gmail):
         result = auth.register("dave@test.com", "password123")
@@ -127,6 +137,15 @@ class TestImapCrud:
         result = auth.register("grace@test.com", "password123")
         accounts = auth.list_imap_accounts(result.user_id)
         assert accounts == []
+
+    def test_list_accounts_returns_display_metadata(self, auth, account_gmail):
+        result = auth.register("meta@test.com", "password123")
+        auth.add_imap_account(result.user_id, account_gmail, "password123")
+        accounts = auth.list_imap_accounts(result.user_id)
+        assert len(accounts) == 1
+        assert accounts[0].name == account_gmail.name
+        assert accounts[0].server == account_gmail.server
+        assert accounts[0].username == account_gmail.username
 
 
 # ── Auth bypass: JWT required on all protected routes ────────────────────────

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 class AuthResult(BaseModel):
     user_id: str
+    session_id: str
     token: str
     account: str
 

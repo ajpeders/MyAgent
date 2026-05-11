@@ -51,11 +51,32 @@ class TestDisplay:
         engine = MailEngine(model="test")
         emails = [email.copy() for email in FAKE_EMAILS]
         emails[0]["recommendation"] = "delete"
-        emails[1]["recommendation"] = "keep"
+        emails[1]["recommendation"] = "review"
         engine.inbox = emails
         output = engine.display()
         assert "[delete]" in output
-        assert "[keep]" in output
+        assert "[review]" in output
+
+    def test_from_dict_normalizes_legacy_recommendations(self):
+        restored = MailEngine.from_dict({
+            "model": "test",
+            "page_size": 10,
+            "page": 0,
+            "account": "Gmail",
+            "inbox": [{"uid": 1, "subject": "Hello", "date": "2026-04-19", "recommendation": "keep"}],
+        })
+        assert restored.inbox[0]["recommendation"] == "review"
+
+    def test_fetch_sorts_newest_first_by_date(self):
+        fake = [
+            {"uid": 1, "from": "a@test.com", "subject": "Older", "date": "2026-04-19", "body": "", "account": "Gmail"},
+            {"uid": 2, "from": "b@test.com", "subject": "Newest", "date": "2026-04-21", "body": "", "account": "Gmail"},
+        ]
+        engine = MailEngine(model="test")
+        with patch("src.core.mail_engine.mail_read_emails", return_value=fake), \
+             patch("src.core.mail_engine.mail_refresh"):
+            engine.fetch(analyze=False)
+        assert [email["subject"] for email in engine.inbox] == ["Newest", "Older"]
 
     def test_display_email_by_page_index(self):
         engine = MailEngine(model="test")
@@ -154,7 +175,7 @@ class TestSerialization:
     def test_to_dict_and_back(self):
         engine = MailEngine(model="qwen3:8b", page_size=5)
         engine.inbox = [FAKE_EMAILS[0].copy()]
-        engine.inbox[0]["recommendation"] = "keep"
+        engine.inbox[0]["recommendation"] = "review"
         engine.account = "Gmail"
         engine.page = 2
 
@@ -166,7 +187,7 @@ class TestSerialization:
         assert restored.page == 2
         assert restored.account == "Gmail"
         assert len(restored.inbox) == 1
-        assert restored.inbox[0]["recommendation"] == "keep"
+        assert restored.inbox[0]["recommendation"] == "review"
 
     def test_to_dict_is_json_serializable(self):
         engine = MailEngine(model="test")
@@ -182,8 +203,8 @@ class TestRecommend:
 
         llm_response = json.dumps({
             "recommendations": [
-                {"index": 1, "action": "keep"},
-                {"index": 2, "action": "keep"},
+                {"index": 1, "action": "review"},
+                {"index": 2, "action": "reply"},
                 {"index": 3, "action": "delete"},
             ]
         })
@@ -192,11 +213,11 @@ class TestRecommend:
             mock_llm.complete_sync.return_value = llm_response
             engine.recommend()
 
-        assert engine.inbox[0]["recommendation"] == "keep"
-        assert engine.inbox[1]["recommendation"] == "keep"
+        assert engine.inbox[0]["recommendation"] == "review"
+        assert engine.inbox[1]["recommendation"] == "reply"
         assert engine.inbox[2]["recommendation"] == "delete"
 
-    def test_recommend_defaults_to_keep_on_failure(self):
+    def test_recommend_defaults_to_review_on_failure(self):
         engine = MailEngine(model="test")
         engine.inbox = [email.copy() for email in FAKE_EMAILS]
 
@@ -205,9 +226,9 @@ class TestRecommend:
             engine.recommend()
 
         for email in engine.inbox:
-            assert email.get("recommendation") == "keep"
+            assert email.get("recommendation") == "review"
 
-    def test_recommend_defaults_to_keep_on_bad_json(self):
+    def test_recommend_defaults_to_review_on_bad_json(self):
         engine = MailEngine(model="test")
         engine.inbox = [email.copy() for email in FAKE_EMAILS]
 
@@ -216,7 +237,34 @@ class TestRecommend:
             engine.recommend()
 
         for email in engine.inbox:
-            assert email.get("recommendation") == "keep"
+            assert email.get("recommendation") == "review"
+
+    def test_recommend_includes_guidance_in_prompt(self):
+        engine = MailEngine(model="test")
+        engine.inbox = [email.copy() for email in FAKE_EMAILS[:1]]
+
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = json.dumps({
+                "recommendations": [{"index": 1, "action": "review", "summary": "x", "todo": "y"}]
+            })
+            engine.recommend(guidance="prioritize calendar items")
+
+        user_message = mock_llm.complete_sync.call_args.args[0][1]["content"]
+        assert "User preferences:" in user_message
+        assert "prioritize calendar items" in user_message
+
+    def test_recommend_includes_feedback_guidance_when_provided(self):
+        engine = MailEngine(model="test")
+        engine.inbox = [email.copy() for email in FAKE_EMAILS[:1]]
+
+        with patch("src.core.mail_engine.default_adapter") as mock_llm:
+            mock_llm.complete_sync.return_value = json.dumps({
+                "recommendations": [{"index": 1, "action": "review", "summary": "x", "todo": "y"}]
+            })
+            engine.recommend(guidance="Recent user feedback on mail recommendations:\n- User rejected recommendation 'delete'")
+
+        user_message = mock_llm.complete_sync.call_args.args[0][1]["content"]
+        assert "Recent user feedback on mail recommendations:" in user_message
 
 
 class TestParseIntent:
@@ -257,13 +305,13 @@ class TestExecute:
              patch("src.core.mail_engine.mail_refresh"), \
              patch("src.core.mail_engine.default_adapter") as mock_llm:
             mock_llm.complete_sync.return_value = json.dumps({
-                "recommendations": [{"index": 1, "action": "keep"}]
+                "recommendations": [{"index": 1, "action": "review"}]
             })
             engine.fetch()
 
         assert len(engine.inbox) == 1
         assert engine.inbox[0]["subject"] == "Hello"
-        assert engine.inbox[0]["recommendation"] == "keep"
+        assert engine.inbox[0]["recommendation"] == "review"
 
     def test_execute_mail_move_removes_from_cache(self):
         engine = MailEngine(model="test")
@@ -373,7 +421,7 @@ class TestFullFlow:
                 "uid": 1,
                 "from": "spam@test.com",
                 "subject": "Buy now",
-                "date": "2026-04-19",
+                "date": "2026-04-20",
                 "body": "Promo",
                 "account": "Gmail",
             },
@@ -389,7 +437,7 @@ class TestFullFlow:
         rec_response = json.dumps({
             "recommendations": [
                 {"index": 1, "action": "delete"},
-                {"index": 2, "action": "keep"},
+                {"index": 2, "action": "reply"},
             ]
         })
         delete_plan = Plan(actions=[
@@ -405,12 +453,12 @@ class TestFullFlow:
 
         assert len(engine.inbox) == 2
         assert engine.inbox[0]["recommendation"] == "delete"
-        assert engine.inbox[1]["recommendation"] == "keep"
+        assert engine.inbox[1]["recommendation"] == "reply"
 
         display = engine.display()
         assert "Buy now" in display
         assert "[delete]" in display
-        assert "[keep]" in display
+        assert "[reply]" in display
 
         with patch("src.core.mail_engine.default_adapter") as mock_llm:
             mock_llm.complete_sync.return_value = delete_plan
@@ -427,4 +475,4 @@ class TestFullFlow:
         display = engine.display()
         assert "Buy now" not in display
         assert "Meeting" in display
-        assert "[keep]" in display
+        assert "[reply]" in display

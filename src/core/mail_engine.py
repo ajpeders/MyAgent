@@ -1,6 +1,8 @@
 """Hybrid mail engine with deterministic state, display, and execution."""
 import json
 import re
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 from src.core.actions.action import Action, ActionType, Plan
 from src.core.actions.mail import (
@@ -17,8 +19,19 @@ class MailEngine:
     """Stateful mail engine that owns inbox cache and mail operations."""
 
     _RECOMMEND_SYSTEM = (
-        "You are an email classifier. For each email, return a recommendation: "
-        "delete, keep, or save. Return JSON matching the schema."
+        "You are an email triage assistant. For each email, return:\n"
+        "- action: delete, archive, reply, todo, calendar, or review\n"
+        "- importance: integer 1-5 (1=low/ignorable, 2=routine, 3=normal, 4=important, 5=urgent/critical)\n"
+        "- summary: one sentence, under 80 characters\n"
+        "- reason: brief explanation of why you chose this action, under 60 characters\n"
+        "- recommended_folder: if the email should be moved to a specific folder, name it here "
+        "(use one of the user's available folders listed below, or empty string if no move needed)\n"
+        "- todo: a concise recommended next step\n"
+        "- suggested_actions: an array of additional actions the user might want to take. "
+        "Available action types:\n"
+        '  - {"type": "add_to_calendar", "title": "...", "date": "YYYY-MM-DD", "time": "HH:MM"} '
+        "— when the email mentions a meeting, event, or deadline\n"
+        "Only include suggested_actions when relevant. Return JSON matching the schema."
     )
     _RECOMMEND_SCHEMA = {
         "type": "object",
@@ -29,10 +42,27 @@ class MailEngine:
                     "type": "object",
                     "properties": {
                         "index": {"type": "integer"},
-                        "action": {"type": "string", "enum": ["delete", "keep", "save"]},
+                        "action": {"type": "string", "enum": ["delete", "archive", "reply", "todo", "calendar", "review"]},
+                        "importance": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "summary": {"type": "string"},
                         "reason": {"type": "string"},
+                        "recommended_folder": {"type": "string"},
+                        "todo": {"type": "string"},
+                        "suggested_actions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {"type": "string"},
+                                    "title": {"type": "string"},
+                                    "date": {"type": "string"},
+                                    "time": {"type": "string"},
+                                },
+                                "required": ["type"],
+                            },
+                        },
                     },
-                    "required": ["index", "action"],
+                    "required": ["index", "action", "importance", "summary", "reason", "todo"],
                 },
             }
         },
@@ -47,13 +77,44 @@ class MailEngine:
         "Do not generate display text."
     )
 
-    def __init__(self, model: str, page_size: int = 20, imap_accounts: list[dict] | None = None):
+    def __init__(self, model: str, page_size: int = 10000, imap_accounts: list[dict] | None = None):
         self.inbox: list[dict] = []
         self.account: str = ""
         self.model: str = model
         self.page: int = 0
         self.page_size: int = page_size
         self.imap_accounts: list[dict] | None = imap_accounts
+
+    @staticmethod
+    def normalize_recommendation(value: str | None) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized == "keep":
+            return "review"
+        if normalized == "save":
+            return "archive"
+        return normalized
+
+    def _normalize_email(self, email: dict) -> dict:
+        email["recommendation"] = self.normalize_recommendation(email.get("recommendation"))
+        return email
+
+    def _sort_inbox(self) -> None:
+        def sort_key(email: dict):
+            raw = email.get("date", "")
+            uid = int(email.get("uid") or 0)
+            if raw:
+                try:
+                    return (1, datetime.fromisoformat(raw).timestamp(), uid)
+                except Exception:
+                    pass
+                try:
+                    dt = parsedate_to_datetime(raw)
+                    return (1, dt.timestamp(), uid)
+                except Exception:
+                    pass
+            return (0, 0.0, uid)
+
+        self.inbox.sort(key=sort_key, reverse=True)
 
     # -- Display -----------------------------------------------------------
 
@@ -94,6 +155,8 @@ class MailEngine:
             rec = email.get("recommendation", "")
             rec_tag = f"  [{rec}]" if rec else ""
             lines.append(f"{i:>3}. {sender} - {subject}{rec_tag}")
+            if email.get("summary"):
+                lines.append(f"     {email['summary']}")
 
         return "\n".join(lines)
 
@@ -195,8 +258,9 @@ class MailEngine:
     @classmethod
     def from_dict(cls, data: dict, imap_accounts: list[dict] | None = None) -> "MailEngine":
         """Restore engine state from the session. Pass imap_accounts from session.imap_accounts."""
-        engine = cls(model=data.get("model", ""), page_size=data.get("page_size", 20), imap_accounts=imap_accounts)
-        engine.inbox = data.get("inbox", [])
+        engine = cls(model=data.get("model", ""), page_size=data.get("page_size", 10000), imap_accounts=imap_accounts)
+        engine.inbox = [engine._normalize_email(email) for email in data.get("inbox", [])]
+        engine._sort_inbox()
         engine.account = data.get("account", "")
         engine.page = data.get("page", 0)
         return engine
@@ -216,29 +280,44 @@ class MailEngine:
             )
         return "\n---\n".join(lines)
 
-    def recommend(self, emails: list[dict] | None = None) -> None:
+    def recommend(self, emails: list[dict] | None = None, guidance: str = "", folders: list[str] | None = None) -> None:
         """Tag emails with recommendations, defaulting to keep on failure."""
         target = emails if emails is not None else self.inbox
         if not target:
             return
 
         try:
+            guidance_block = f"\n\nUser preferences:\n{guidance.strip()}" if guidance.strip() else ""
+            folders_block = f"\n\nAvailable folders:\n{', '.join(folders)}" if folders else ""
             messages = [
                 {"role": "system", "content": self._RECOMMEND_SYSTEM},
-                {"role": "user", "content": f"Emails:\n{self._emails_for_llm(target)}"},
+                {"role": "user", "content": f"Emails:\n{self._emails_for_llm(target)}{folders_block}{guidance_block}"},
             ]
             raw = default_adapter.complete_sync(messages, self._RECOMMEND_SCHEMA, self.model)
             data = json.loads(raw)
             recommendations = {
-                rec["index"]: rec["action"]
+                rec["index"]: rec
                 for rec in data.get("recommendations", [])
-                if rec.get("action") in {"delete", "keep", "save"}
+                if rec.get("action") in {"delete", "archive", "reply", "todo", "calendar", "review"}
             }
             for i, email in enumerate(target, start=1):
-                email["recommendation"] = recommendations.get(i, "keep")
+                rec = recommendations.get(i, {})
+                email["recommendation"] = rec.get("action", "review")
+                email["importance"] = max(1, min(5, int(rec.get("importance", 3))))
+                email["summary"] = rec.get("summary", "")[:100]
+                email["recommendation_reason"] = rec.get("reason", "")[:80]
+                email["recommended_folder"] = rec.get("recommended_folder", "")[:60]
+                email["recommended_todo"] = rec.get("todo", "")[:120]
+                email["suggested_actions"] = rec.get("suggested_actions", [])
+                self._normalize_email(email)
         except Exception:
             for email in target:
-                email["recommendation"] = "keep"
+                email["recommendation"] = "review"
+                email["importance"] = 3
+                fallback = (email.get("body", "") or email.get("subject", "") or "").strip()
+                email["summary"] = fallback[:100]
+                email["recommended_todo"] = "Review"
+                self._normalize_email(email)
 
     def parse_intent(self, user_input: str) -> Plan:
         """Parse a user mail command into executable actions."""
@@ -265,19 +344,22 @@ class MailEngine:
 
     # -- IMAP operations ---------------------------------------------------
 
-    def fetch(self, count: int = 0, unread_only: bool = False, account: str = "") -> None:
+    def fetch(self, count: int = 0, unread_only: bool = False, account: str = "", mailbox: str = "", analyze: bool = True) -> None:
         """Fetch emails and populate the inbox cache."""
         self.account = account or self.account
-        mail_refresh()
+        mail_refresh(self.imap_accounts)
         self.inbox = mail_read_emails(
             count=count or MAIL_SUMMARY_COUNT,
             unread_only=unread_only,
-            mailbox=TARGET_MAILBOX,
+            mailbox=mailbox or TARGET_MAILBOX,
             account_name=self.account,
             imap_accounts=self.imap_accounts,
         )
+        self.inbox = [self._normalize_email(email) for email in self.inbox]
+        self._sort_inbox()
         self.page = 0
-        self.recommend()
+        if analyze:
+            self.recommend()
 
     def execute(self, action: Action) -> str:
         """Execute one deterministic action and return a result message."""
@@ -466,12 +548,21 @@ class MailEngine:
             "agent": "mail",
             "emails": [
                 {
+                    "id": email.get("id"),
                     "index": index,
+                    "uid": email.get("uid"),
+                    "message_id": email.get("message_id", ""),
                     "from": email.get("from", ""),
                     "subject": email.get("subject", ""),
                     "date": email.get("date", ""),
                     "recommendation": email.get("recommendation", ""),
+                    "summary": email.get("summary", ""),
+                    "recommended_todo": email.get("recommended_todo", ""),
+                    "suggested_actions": email.get("suggested_actions", []),
+                    "attachments": email.get("attachments", []),
                     "account": email.get("account", ""),
+                    "mailbox": email.get("mailbox", ""),
+                    "read": email.get("read", False),
                 }
                 for index, email in enumerate(self.current_page(), start=1)
             ],

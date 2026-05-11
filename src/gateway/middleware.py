@@ -45,3 +45,27 @@ def admin_required(request: Request) -> dict:
 
 def get_session_id(request: Request) -> str | None:
     return request.headers.get("X-Session-ID") or request.query_params.get("session_id")
+
+
+def require_user(request: Request) -> str:
+    """Return user_id from JWT (Authorization: Bearer) or device token (X-Device-Token).
+
+    Used by endpoints that need to accept both web clients and external integrations
+    like iPhone Shortcuts. Raises 401 if neither source resolves.
+    """
+    token = get_token(request)
+    if token:
+        try:
+            payload = decode(token)
+            user_id = payload.get("user_id")
+            if user_id:
+                return user_id
+        except Exception:
+            pass
+    device_token = request.headers.get("X-Device-Token")
+    if device_token:
+        from src.services.auth.service import AuthService
+        user_id = AuthService().verify_device_token(device_token)
+        if user_id:
+            return user_id
+    raise HTTPException(status_code=401, detail="Missing or invalid credentials")

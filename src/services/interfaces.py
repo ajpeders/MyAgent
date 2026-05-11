@@ -36,3 +36,14 @@ class SearchServiceInterface(Protocol):
 class LLMServiceInterface(Protocol):
     def complete(self, messages: list[dict], schema: dict, model: str) -> str: ...
     def embeddings(self, text: str, model: str) -> list[float]: ...
+
+
+class WhisperServiceInterface(Protocol):
+    async def transcribe(
+        self,
+        audio_bytes: bytes,
+        *,
+        filename: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+    ) -> dict: ...

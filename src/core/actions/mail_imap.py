@@ -113,9 +113,78 @@ def _html_to_text(html: str) -> str:
     return extractor.get_text()
 
 
-def _extract_body(raw_bytes: bytes, max_chars: int = 500) -> str:
-    """Extract plain-text body from a raw email, truncated to max_chars.
-    Falls back to stripping HTML if no text/plain part exists."""
+def _extract_attachments(raw_bytes: bytes) -> list[dict]:
+    """Walk MIME parts and return metadata for each attachment."""
+    msg = email.message_from_bytes(raw_bytes)
+    attachments = []
+    for part in msg.walk():
+        content_disposition = str(part.get("Content-Disposition") or "")
+        if "attachment" not in content_disposition:
+            continue
+        filename = part.get_filename()
+        if filename:
+            filename = _decode_header(filename)
+        else:
+            filename = "untitled"
+        content_type = part.get_content_type() or "application/octet-stream"
+        payload = part.get_payload(decode=True)
+        size = len(payload) if payload else 0
+        attachments.append({
+            "filename": filename,
+            "content_type": content_type,
+            "size": size,
+        })
+    return attachments
+
+
+def fetch_attachment(
+    uid: int,
+    attachment_index: int,
+    mailbox: str,
+    account_name: str,
+    imap_accounts: list[dict] | None = None,
+) -> tuple[str, str, bytes]:
+    """Fetch a specific attachment by UID and attachment index.
+
+    Connects to IMAP, fetches RFC822 for the given UID, walks the MIME tree
+    counting attachment parts, and returns (filename, content_type, raw_bytes)
+    for the matching index. Raises ValueError if not found.
+    """
+    acct = _get_account(account_name, imap_accounts)
+    client = _connect(acct)
+    try:
+        client.select_folder(mailbox, readonly=True)
+        raw_messages = client.fetch([uid], ["RFC822"])
+        data = raw_messages.get(uid, {})
+        raw_body = data.get(b"RFC822", b"")
+        if not raw_body:
+            raise ValueError(f"No message found for UID {uid}")
+
+        msg = email.message_from_bytes(raw_body)
+        idx = 0
+        for part in msg.walk():
+            content_disposition = str(part.get("Content-Disposition") or "")
+            if "attachment" not in content_disposition:
+                continue
+            if idx == attachment_index:
+                filename = part.get_filename()
+                if filename:
+                    filename = _decode_header(filename)
+                else:
+                    filename = "untitled"
+                content_type = part.get_content_type() or "application/octet-stream"
+                payload = part.get_payload(decode=True) or b""
+                return filename, content_type, payload
+            idx += 1
+
+        raise ValueError(f"Attachment index {attachment_index} not found for UID {uid}")
+    finally:
+        client.logout()
+
+
+def _extract_body(raw_bytes: bytes) -> tuple[str, str]:
+    """Extract body from a raw email. Returns (plain_text, html).
+    Plain text falls back to stripping HTML if no text/plain part exists."""
     msg = email.message_from_bytes(raw_bytes)
     plain = ""
     html = ""
@@ -142,10 +211,83 @@ def _extract_body(raw_bytes: bytes, max_chars: int = 500) -> str:
             else:
                 plain = text
 
-    body = plain.strip() if plain else _html_to_text(html)
-    if len(body) > max_chars:
-        body = body[:max_chars] + "..."
-    return body
+    text_body = plain.strip() if plain else _html_to_text(html)
+    return text_body, html.strip()
+
+
+def _parse_email_data(
+    uid: int,
+    data: dict,
+    acct: dict,
+    mailbox: str,
+    uidvalidity: str,
+    include_body: bool = True,
+) -> dict:
+    """Parse IMAP fetch data for a single UID into an email dict.
+
+    When include_body is True, returns a full dict with body, message_id,
+    uidvalidity, and mailbox.  When False, returns a simpler dict keyed by
+    'id' instead of 'uid'.
+    """
+    envelope = data.get(b"ENVELOPE")
+    flags = data.get(b"FLAGS", ())
+    raw_body = data.get(b"RFC822", b"")
+    is_read = b"\\Seen" in flags
+
+    if envelope:
+        subject = _decode_header(
+            envelope.subject.decode("utf-8", errors="replace")
+            if isinstance(envelope.subject, bytes)
+            else (envelope.subject or "")
+        )
+        from_addr = ""
+        if envelope.from_:
+            addr = envelope.from_[0]
+            name = (addr.name.decode("utf-8", errors="replace")
+                    if isinstance(addr.name, bytes) else (addr.name or ""))
+            mailbox_part = (addr.mailbox.decode("utf-8", errors="replace")
+                            if isinstance(addr.mailbox, bytes) else (addr.mailbox or ""))
+            host_part = (addr.host.decode("utf-8", errors="replace")
+                         if isinstance(addr.host, bytes) else (addr.host or ""))
+            from_addr = f"{name} <{mailbox_part}@{host_part}>" if name else f"{mailbox_part}@{host_part}"
+        date_str = str(envelope.date) if envelope.date else ""
+    else:
+        msg = email.message_from_bytes(raw_body or b"")
+        subject = _decode_header(msg.get("Subject", ""))
+        from_addr = msg.get("From", "")
+        date_str = msg.get("Date", "")
+
+    if not include_body:
+        return {
+            "id": uid,
+            "subject": subject,
+            "from": from_addr,
+            "date": date_str,
+            "read": is_read,
+            "account": acct["name"],
+            "attachments": [],
+        }
+
+    body, body_html = _extract_body(raw_body) if raw_body else ("", "")
+    msg = email.message_from_bytes(raw_body or b"")
+    message_id = _decode_header(msg.get("Message-ID", "")).strip()
+
+    result: dict = {
+        "uid": uid,
+        "uidvalidity": uidvalidity,
+        "message_id": message_id,
+        "subject": subject,
+        "from": from_addr,
+        "date": date_str,
+        "body": body,
+        "account": acct["name"],
+        "mailbox": mailbox,
+        "read": is_read,
+        "attachments": _extract_attachments(raw_body),
+    }
+    if body_html:
+        result["body_html"] = body_html
+    return result
 
 
 def _fetch_from_account(
@@ -157,7 +299,10 @@ def _fetch_from_account(
     """Fetch emails from a single IMAP account."""
     client = _connect(acct)
     try:
-        client.select_folder(mailbox, readonly=True)
+        folder_info = client.select_folder(mailbox, readonly=True)
+        uidvalidity = ""
+        if isinstance(folder_info, dict):
+            uidvalidity = str(folder_info.get(b"UIDVALIDITY") or folder_info.get("UIDVALIDITY") or "")
 
         criteria = ["UNSEEN"] if unread_only else ["ALL"]
         uids = client.search(criteria)
@@ -166,48 +311,11 @@ def _fetch_from_account(
         if not uids:
             return []
 
-        raw_messages = client.fetch(uids, ["ENVELOPE", "RFC822"])
-        emails_out = []
-        for uid in uids:
-            data = raw_messages.get(uid, {})
-            envelope = data.get(b"ENVELOPE")
-            raw_body = data.get(b"RFC822", b"")
-            body = _extract_body(raw_body) if raw_body else ""
-
-            if envelope:
-                subject = _decode_header(envelope.subject.decode("utf-8", errors="replace")
-                                         if isinstance(envelope.subject, bytes)
-                                         else (envelope.subject or ""))
-                from_addr = ""
-                if envelope.from_:
-                    addr = envelope.from_[0]
-                    name = (addr.name.decode("utf-8", errors="replace")
-                            if isinstance(addr.name, bytes) else (addr.name or ""))
-                    mailbox_part = (addr.mailbox.decode("utf-8", errors="replace")
-                                    if isinstance(addr.mailbox, bytes) else (addr.mailbox or ""))
-                    host_part = (addr.host.decode("utf-8", errors="replace")
-                                 if isinstance(addr.host, bytes) else (addr.host or ""))
-                    from_addr = f"{name} <{mailbox_part}@{host_part}>" if name else f"{mailbox_part}@{host_part}"
-                date_str = str(envelope.date) if envelope.date else ""
-                emails_out.append({
-                    "uid": uid,
-                    "subject": subject,
-                    "from": from_addr,
-                    "date": date_str,
-                    "body": body,
-                    "account": acct["name"],
-                })
-            else:
-                msg = email.message_from_bytes(raw_body or b"")
-                emails_out.append({
-                    "uid": uid,
-                    "subject": _decode_header(msg.get("Subject", "")),
-                    "from": msg.get("From", ""),
-                    "date": msg.get("Date", ""),
-                    "body": body,
-                    "account": acct["name"],
-                })
-        return emails_out
+        raw_messages = client.fetch(uids, ["ENVELOPE", "FLAGS", "RFC822"])
+        return [
+            _parse_email_data(uid, raw_messages.get(uid, {}), acct, mailbox, uidvalidity)
+            for uid in uids
+        ]
     finally:
         client.logout()
 
@@ -244,62 +352,38 @@ def read_all_emails(
     imap_accounts: list[dict] | None = None,
 ) -> list[dict]:
     """Fetch ALL emails from the given mailbox (no count limit)."""
-    acct = _get_account(account_name, imap_accounts)
-    return _fetch_all_from_account(acct, mailbox)
+    sources = imap_accounts if imap_accounts is not None else IMAP_ACCOUNTS
+    if account_name or len(sources) == 1:
+        acct = _get_account(account_name, imap_accounts)
+        return _fetch_all_from_account(acct, mailbox)
+
+    all_emails = []
+    for acct in sources:
+        try:
+            all_emails.extend(_fetch_all_from_account(acct, mailbox))
+        except Exception as e:
+            print(f"[mail] warning: could not fetch all from {acct.get('name', '?')}: {e}", flush=True)
+    return all_emails
 
 
 def _fetch_all_from_account(acct: dict, mailbox: str) -> list[dict]:
     """Fetch all emails from a single account's mailbox (no limit)."""
     client = _connect(acct)
     try:
-        client.select_folder(mailbox, readonly=True)
+        folder_info = client.select_folder(mailbox, readonly=True)
+        uidvalidity = ""
+        if isinstance(folder_info, dict):
+            uidvalidity = str(folder_info.get(b"UIDVALIDITY") or folder_info.get("UIDVALIDITY") or "")
         uids = client.search(["ALL"])
 
         if not uids:
             return []
 
-        raw_messages = client.fetch(uids, ["ENVELOPE", "RFC822"])
-        emails_out = []
-        for uid in uids:
-            data = raw_messages.get(uid, {})
-            envelope = data.get(b"ENVELOPE")
-            raw_body = data.get(b"RFC822", b"")
-            body = _extract_body(raw_body) if raw_body else ""
-
-            if envelope:
-                subject = _decode_header(envelope.subject.decode("utf-8", errors="replace")
-                                         if isinstance(envelope.subject, bytes)
-                                         else (envelope.subject or ""))
-                from_addr = ""
-                if envelope.from_:
-                    addr = envelope.from_[0]
-                    name = (addr.name.decode("utf-8", errors="replace")
-                            if isinstance(addr.name, bytes) else (addr.name or ""))
-                    mailbox_part = (addr.mailbox.decode("utf-8", errors="replace")
-                                    if isinstance(addr.mailbox, bytes) else (addr.mailbox or ""))
-                    host_part = (addr.host.decode("utf-8", errors="replace")
-                                 if isinstance(addr.host, bytes) else (addr.host or ""))
-                    from_addr = f"{name} <{mailbox_part}@{host_part}>" if name else f"{mailbox_part}@{host_part}"
-                date_str = str(envelope.date) if envelope.date else ""
-                emails_out.append({
-                    "uid": uid,
-                    "subject": subject,
-                    "from": from_addr,
-                    "date": date_str,
-                    "body": body,
-                    "account": acct["name"],
-                })
-            else:
-                msg = email.message_from_bytes(raw_body or b"")
-                emails_out.append({
-                    "uid": uid,
-                    "subject": _decode_header(msg.get("Subject", "")),
-                    "from": msg.get("From", ""),
-                    "date": msg.get("Date", ""),
-                    "body": body,
-                    "account": acct["name"],
-                })
-        return emails_out
+        raw_messages = client.fetch(uids, ["ENVELOPE", "FLAGS", "RFC822"])
+        return [
+            _parse_email_data(uid, raw_messages.get(uid, {}), acct, mailbox, uidvalidity)
+            for uid in uids
+        ]
     finally:
         client.logout()
 
@@ -362,6 +446,25 @@ def move_by_uids(
         client.copy(uids, folder)
         client.add_flags(uids, [b"\\Deleted"])
         client.expunge(uids)
+        return len(uids)
+    finally:
+        client.logout()
+
+
+def mark_read_by_uids(
+    uids: list[int],
+    mailbox: str = "INBOX",
+    account_name: str = "",
+    imap_accounts: list[dict] | None = None,
+) -> int:
+    """Mark specific emails as read by UID."""
+    if not uids:
+        return 0
+    acct = _get_account(account_name, imap_accounts)
+    client = _connect(acct)
+    try:
+        client.select_folder(mailbox)
+        client.add_flags(uids, [b"\\Seen"])
         return len(uids)
     finally:
         client.logout()
@@ -458,48 +561,88 @@ def _fetch_by_date_from_account(
             return []
 
         raw_messages = client.fetch(uids, ["ENVELOPE", "FLAGS", "RFC822"])
-        emails_out = []
-        for uid in uids:
-            data = raw_messages.get(uid, {})
-            envelope = data.get(b"ENVELOPE")
-            flags = data.get(b"FLAGS", ())
-            raw_body = data.get(b"RFC822", b"")
-            is_read = b"\\Seen" in flags
-
-            if envelope:
-                subject = _decode_header(
-                    envelope.subject.decode("utf-8", errors="replace")
-                    if isinstance(envelope.subject, bytes)
-                    else (envelope.subject or "")
-                )
-                from_addr = ""
-                if envelope.from_:
-                    addr = envelope.from_[0]
-                    name = (addr.name.decode("utf-8", errors="replace")
-                            if isinstance(addr.name, bytes) else (addr.name or ""))
-                    mailbox_part = (addr.mailbox.decode("utf-8", errors="replace")
-                                    if isinstance(addr.mailbox, bytes) else (addr.mailbox or ""))
-                    host_part = (addr.host.decode("utf-8", errors="replace")
-                                 if isinstance(addr.host, bytes) else (addr.host or ""))
-                    from_addr = f"{name} <{mailbox_part}@{host_part}>" if name else f"{mailbox_part}@{host_part}"
-                date_str = str(envelope.date) if envelope.date else ""
-            else:
-                msg = email.message_from_bytes(raw_body or b"")
-                subject = _decode_header(msg.get("Subject", ""))
-                from_addr = msg.get("From", "")
-                date_str = msg.get("Date", "")
-
-            emails_out.append({
-                "id": uid,
-                "subject": subject,
-                "from": from_addr,
-                "date": date_str,
-                "read": is_read,
-                "account": acct["name"],
-            })
-        return emails_out
+        return [
+            _parse_email_data(uid, raw_messages.get(uid, {}), acct, mailbox, "", include_body=False)
+            for uid in uids
+        ]
     finally:
         client.logout()
+
+
+def _search_from_account(
+    acct: dict, criteria: list, mailbox: str, max_results: int
+) -> list[dict]:
+    """Run IMAP SEARCH on a single account and return parsed results."""
+    client = _connect(acct)
+    try:
+        folder_info = client.select_folder(mailbox, readonly=True)
+        uidvalidity = ""
+        if isinstance(folder_info, dict):
+            uidvalidity = str(folder_info.get(b"UIDVALIDITY") or folder_info.get("UIDVALIDITY") or "")
+
+        uids = client.search(criteria)
+        uids = uids[-max_results:]
+
+        if not uids:
+            return []
+
+        raw_messages = client.fetch(uids, ["ENVELOPE", "FLAGS", "RFC822"])
+        return [
+            _parse_email_data(uid, raw_messages.get(uid, {}), acct, mailbox, uidvalidity, include_body=False)
+            for uid in uids
+        ]
+    finally:
+        client.logout()
+
+
+def search_emails(
+    text: str = "",
+    from_addr: str = "",
+    subject: str = "",
+    since: str = "",
+    before: str = "",
+    mailbox: str = "INBOX",
+    account_name: str = "",
+    max_results: int = 100,
+    imap_accounts: list[dict] | None = None,
+) -> list[dict]:
+    """Search emails via IMAP SEARCH with optional criteria.
+
+    since/before are date strings in YYYY-MM-DD format.
+    IMAP BEFORE is exclusive — caller should add 1 day for inclusive end dates.
+    """
+    from datetime import datetime, timedelta
+
+    criteria: list = []
+    if text:
+        criteria.extend(["TEXT", text])
+    if from_addr:
+        criteria.extend(["FROM", from_addr])
+    if subject:
+        criteria.extend(["SUBJECT", subject])
+    if since:
+        since_dt = datetime.strptime(since, "%Y-%m-%d")
+        criteria.extend(["SINCE", since_dt.strftime("%d-%b-%Y")])
+    if before:
+        before_dt = datetime.strptime(before, "%Y-%m-%d")
+        before_dt += timedelta(days=1)
+        criteria.extend(["BEFORE", before_dt.strftime("%d-%b-%Y")])
+
+    if not criteria:
+        raise ValueError("At least one search criterion required")
+
+    sources = imap_accounts if imap_accounts is not None else IMAP_ACCOUNTS
+    if account_name or len(sources) == 1:
+        acct = _get_account(account_name, imap_accounts)
+        return _search_from_account(acct, criteria, mailbox, max_results)
+
+    all_emails: list[dict] = []
+    for acct in sources:
+        try:
+            all_emails.extend(_search_from_account(acct, criteria, mailbox, max_results))
+        except Exception as e:
+            print(f"[mail] warning: could not search {acct.get('name', '?')}: {e}", flush=True)
+    return all_emails
 
 
 def refresh_mail():

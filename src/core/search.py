@@ -1,5 +1,6 @@
 """Web search abstraction with pluggable providers."""
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Literal
 
 from src.core.config import (
@@ -24,6 +25,19 @@ class SearchResult:
     snippet: str
 
 
+def _duckduckgo_client_class():
+    """Support both legacy and current DuckDuckGo package module layouts."""
+    for module_name in ("ddgs", "duckduckgo_search"):
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            continue
+        ddgs_class = getattr(module, "DDGS", None)
+        if ddgs_class is not None:
+            return ddgs_class
+    raise ImportError("DuckDuckGo search dependency is unavailable. Install `duckduckgo-search`.")
+
+
 # ── Provider implementations ───────────────────────────────────────────────────
 
 
@@ -44,7 +58,7 @@ class _DuckDuckGoProvider:
     """Uses duckduckgo-search Python package."""
 
     def search(self, query: str, max_results: int = 10) -> list[SearchResult]:
-        from ddgs import DDGS
+        DDGS = _duckduckgo_client_class()
 
         results = []
         with DDGS() as ddgs:

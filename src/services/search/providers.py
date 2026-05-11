@@ -1,5 +1,6 @@
 """Search providers — DuckDuckGo, Searx, Google. Extracted from core/search.py."""
 from dataclasses import dataclass
+from importlib import import_module
 
 from src.core.config import SEARCH_PROVIDER, SEARCH_SEARX_URL, GOOGLE_API_KEY, GOOGLE_SEARCH_CX
 
@@ -11,9 +12,29 @@ class SearchResult:
     snippet: str
 
 
+PROVIDER_LABELS: dict[str, str] = {
+    "duckduckgo": "DuckDuckGo",
+    "searx": "Searx",
+    "google": "Google Custom Search",
+}
+
+
+def _duckduckgo_client_class():
+    """Support both legacy and current DuckDuckGo package module layouts."""
+    for module_name in ("ddgs", "duckduckgo_search"):
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            continue
+        ddgs_class = getattr(module, "DDGS", None)
+        if ddgs_class is not None:
+            return ddgs_class
+    raise ImportError("DuckDuckGo search dependency is unavailable. Install `duckduckgo-search`.")
+
+
 class _DuckDuckGoProvider:
     def search(self, query: str, max_results: int = 10) -> list[SearchResult]:
-        from ddgs import DDGS
+        DDGS = _duckduckgo_client_class()
 
         results = []
         with DDGS() as ddgs:
@@ -78,9 +99,16 @@ class _GoogleProvider:
         return results
 
 
-def get_provider():
+def list_available_providers() -> list[dict[str, str]]:
+    return [
+        {"id": provider_id, "label": label}
+        for provider_id, label in PROVIDER_LABELS.items()
+    ]
+
+
+def get_provider(provider_name: str | None = None):
     """Return the configured search provider instance."""
-    provider = SEARCH_PROVIDER.lower()
+    provider = (provider_name or SEARCH_PROVIDER).lower()
     if provider == "duckduckgo":
         return _DuckDuckGoProvider()
     elif provider == "searx":
